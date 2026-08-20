@@ -5,6 +5,9 @@ import { SecurityProvider } from './context/SecurityContext';
 import { ExpenseProvider } from './context/ExpenseContext';
 import { ActiveTab, Expense } from './types';
 
+import { AuthScreen } from './components/auth/AuthScreen';
+import { useAuth } from './context/AuthContext';
+
 // Layout & UI
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
@@ -161,15 +164,39 @@ const MainLayout: React.FC = () => {
   );
 };
 
+const AppContent: React.FC = () => {
+  const { user, isDemoMode, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-50 dark:bg-surface-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-brand-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs font-semibold text-surface-500 dark:text-surface-400">Loading ExpenseTracker...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show AuthScreen if user is not authenticated and not in demo mode
+  if (!user && !isDemoMode) {
+    return <AuthScreen />;
+  }
+
+  return (
+    <SecurityProvider>
+      <ExpenseProvider>
+        <MainLayout />
+      </ExpenseProvider>
+    </SecurityProvider>
+  );
+};
+
 export function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <SecurityProvider>
-          <ExpenseProvider>
-            <MainLayout />
-          </ExpenseProvider>
-        </SecurityProvider>
+        <AppContent />
       </AuthProvider>
     </ThemeProvider>
   );

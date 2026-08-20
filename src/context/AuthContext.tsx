@@ -40,8 +40,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
-    // If Supabase is not configured, default to demo mode
-    if (!isSupabaseConfigured) return true;
     return localStorage.getItem('et_demo_active') === 'true';
   });
 
@@ -343,23 +341,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (user) {
-        // 1. Delete user transactions and budgets
-        await supabase.from('expenses').delete().eq('user_id', user.id);
-        await supabase.from('budgets').delete().eq('user_id', user.id);
-        // 2. Delete user profile record
-        await supabase.from('profiles').delete().eq('id', user.id);
+        // 1. Call server-side PostgreSQL function to delete from auth.users (cascades to all tables)
+        const { error: rpcError } = await supabase.rpc('delete_user', {
+          target_user_id: user.id,
+        });
 
-        // 3. Clear local preferences and credentials
+        if (rpcError) {
+          console.warn('delete_user RPC notice:', rpcError);
+          // Fallback: Delete user transactions, budgets, and profile manually
+          await supabase.from('expenses').delete().eq('user_id', user.id);
+          await supabase.from('budgets').delete().eq('user_id', user.id);
+          await supabase.from('profiles').delete().eq('id', user.id);
+        }
+
+        // 2. Clear local preferences and credentials
         localStorage.removeItem('et_sec_pin_hash');
         localStorage.removeItem('et_sec_bio_enabled');
         localStorage.removeItem('et_sec_bio_cred_id');
         localStorage.removeItem('et_user_currency');
+        localStorage.removeItem('et_demo_active');
 
-        // 4. Sign out of Supabase
+        // 3. Sign out of Supabase
         await supabase.auth.signOut();
         setUser(null);
         setSession(null);
         setProfile(null);
+        setIsDemoMode(false);
       }
       return { error: null };
     } catch (err: unknown) {

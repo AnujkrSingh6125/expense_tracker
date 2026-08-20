@@ -136,3 +136,41 @@ DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- 8. Permanent User Deletion Function (Deletes from auth.users with CASCADE)
+CREATE OR REPLACE FUNCTION public.delete_user(target_user_id UUID DEFAULT NULL)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  curr_user_id UUID;
+BEGIN
+  -- Determine user ID from auth context or argument
+  curr_user_id := COALESCE(auth.uid(), target_user_id);
+
+  IF curr_user_id IS NULL THEN
+    RAISE EXCEPTION 'User ID not found or not authenticated';
+  END IF;
+
+  -- 1. Explicitly clean up public schema records
+  DELETE FROM public.expenses WHERE user_id = curr_user_id;
+  DELETE FROM public.budgets WHERE user_id = curr_user_id;
+  DELETE FROM public.profiles WHERE id = curr_user_id;
+
+  -- 2. Clean auth schema sessions and identities to prevent constraint errors
+  DELETE FROM auth.identities WHERE user_id = curr_user_id;
+  DELETE FROM auth.sessions WHERE user_id = curr_user_id;
+
+  -- 3. Delete the user record completely from auth.users
+  DELETE FROM auth.users WHERE id = curr_user_id;
+END;
+$$;
+
+-- Grant execution permission to authenticated users and service_role
+GRANT EXECUTE ON FUNCTION public.delete_user(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_user(UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.delete_user(UUID) TO anon;
+
+
