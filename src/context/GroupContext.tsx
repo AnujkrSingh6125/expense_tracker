@@ -1,0 +1,1148 @@
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAuth } from './AuthContext';
+import { useExpenses } from './ExpenseContext';
+import {
+  Group,
+  GroupMember,
+  GroupExpense,
+  GroupExpenseSplit,
+  GroupMetricSummary,
+  GroupMemberSummary,
+  GroupSettlement,
+  SplitType,
+} from '../types';
+import {
+  getAllLocalGroups,
+  saveLocalGroup,
+  saveLocalGroups,
+  deleteLocalGroup,
+  getLocalGroupMembers,
+  saveLocalGroupMembers,
+  getLocalGroupExpenses,
+  saveLocalGroupExpense,
+  saveLocalGroupExpenses,
+  deleteLocalGroupExpense,
+  saveLocalExpenseSplits,
+  enqueueSyncItem,
+  getPendingSyncQueue,
+  removeSyncItem,
+} from '../lib/db';
+import {
+  calculateGroupMetrics,
+  calculateMemberSummaries,
+  calculatePairwiseSettlements,
+  computeSplitAllocations,
+} from '../lib/groupCalculations';
+
+interface GroupContextType {
+  groups: Group[];
+  activeGroup: Group | null;
+  groupMembers: GroupMember[];
+  groupExpenses: GroupExpense[];
+  groupSplits: GroupExpenseSplit[];
+  metrics: GroupMetricSummary;
+  memberSummaries: GroupMemberSummary[];
+  settlements: GroupSettlement[];
+  isOnline: boolean;
+  isSyncing: boolean;
+  pendingSyncCount: number;
+  isLoading: boolean;
+  setActiveGroupId: (groupId: string | null) => void;
+  createGroup: (name: string, description?: string, currency?: string) => Promise<{ group: Group | null; error: Error | null }>;
+  joinGroup: (joinCode: string) => Promise<{ group: Group | null; error: Error | null }>;
+  deleteGroup: (groupId: string) => Promise<{ error: Error | null }>;
+  addGroupExpense: (
+    expenseData: {
+      title: string;
+      amount: number;
+      category: string;
+      paid_by: string;
+      split_type: SplitType;
+      expense_date: string;
+      notes?: string;
+    },
+    customAllocations?: Record<string, number>
+  ) => Promise<{ expense: GroupExpense | null; error: Error | null }>;
+  updateGroupExpense: (
+    expenseId: string,
+    updates: Partial<GroupExpense>,
+    customAllocations?: Record<string, number>
+  ) => Promise<{ error: Error | null }>;
+  deleteGroupExpense: (expenseId: string) => Promise<{ error: Error | null }>;
+  settleExpenseSplit: (splitId: string) => Promise<{ error: Error | null }>;
+  syncPendingQueue: () => Promise<void>;
+  refreshGroupData: () => Promise<void>;
+}
+
+const GroupContext = createContext<GroupContextType | undefined>(undefined);
+
+function generateJoinCode(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = 'EXP-';
+  for (let i = 0; i < 4; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+// Generate Demo Groups Data for Instant Offline / Guest Previews
+function generateDemoGroups(currentUserId: string, currentUserName: string, userCurrency: string) {
+  const g1Id = 'demo-group-trip';
+  const g2Id = 'demo-group-flat';
+
+  const demoGroups: Group[] = [
+    {
+      id: g1Id,
+      name: 'Goa Weekend Trip',
+      description: 'Beach resort, scooty rentals, seafood & parties',
+      currency: userCurrency || '₹',
+      join_code: 'EXP-GOA7',
+      created_by: currentUserId,
+      created_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+      member_count: 4,
+      sync_status: 'synced',
+    },
+    {
+      id: g2Id,
+      name: 'Flat 402 Shared Living',
+      description: 'Groceries, high-speed WiFi, domestic bills & maid',
+      currency: userCurrency || '₹',
+      join_code: 'EXP-FLAT',
+      created_by: 'demo-user-priya',
+      created_at: new Date(Date.now() - 30 * 86400000).toISOString(),
+      member_count: 3,
+      sync_status: 'synced',
+    },
+  ];
+
+  const demoMembers: Record<string, GroupMember[]> = {
+    [g1Id]: [
+      {
+        id: 'gm-1',
+        group_id: g1Id,
+        user_id: currentUserId,
+        role: 'admin',
+        joined_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+        profile: { id: currentUserId, email: 'you@expensetracker.app', full_name: currentUserName || 'You', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+      {
+        id: 'gm-2',
+        group_id: g1Id,
+        user_id: 'demo-user-rohit',
+        role: 'member',
+        joined_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+        profile: { id: 'demo-user-rohit', email: 'rohit.sharma@example.com', full_name: 'Rohit Sharma', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+      {
+        id: 'gm-3',
+        group_id: g1Id,
+        user_id: 'demo-user-sneha',
+        role: 'member',
+        joined_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+        profile: { id: 'demo-user-sneha', email: 'sneha.patel@example.com', full_name: 'Sneha Patel', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+      {
+        id: 'gm-4',
+        group_id: g1Id,
+        user_id: 'demo-user-arjun',
+        role: 'member',
+        joined_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+        profile: { id: 'demo-user-arjun', email: 'arjun.verma@example.com', full_name: 'Arjun Verma', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+    ],
+    [g2Id]: [
+      {
+        id: 'gm-5',
+        group_id: g2Id,
+        user_id: currentUserId,
+        role: 'member',
+        joined_at: new Date(Date.now() - 30 * 86400000).toISOString(),
+        profile: { id: currentUserId, email: 'you@expensetracker.app', full_name: currentUserName || 'You', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+      {
+        id: 'gm-6',
+        group_id: g2Id,
+        user_id: 'demo-user-priya',
+        role: 'admin',
+        joined_at: new Date(Date.now() - 30 * 86400000).toISOString(),
+        profile: { id: 'demo-user-priya', email: 'priya.singh@example.com', full_name: 'Priya Singh', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+      {
+        id: 'gm-7',
+        group_id: g2Id,
+        user_id: 'demo-user-karan',
+        role: 'member',
+        joined_at: new Date(Date.now() - 30 * 86400000).toISOString(),
+        profile: { id: 'demo-user-karan', email: 'karan.mehta@example.com', full_name: 'Karan Mehta', currency: userCurrency || '₹', pin_hash: null, biometric_enabled: false, biometric_credential_id: null },
+      },
+    ],
+  };
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const demoExpenses: Record<string, GroupExpense[]> = {
+    [g1Id]: [
+      {
+        id: 'gexp-1',
+        group_id: g1Id,
+        paid_by: currentUserId,
+        amount: 8400,
+        title: 'Beachside Villa Stay & Breakfast',
+        category: 'Rent',
+        split_type: 'equal',
+        expense_date: todayStr,
+        notes: '2 Nights booking through Airbnb',
+        created_at: new Date(Date.now() - 2 * 86400000).toISOString(),
+        sync_status: 'synced',
+      },
+      {
+        id: 'gexp-2',
+        group_id: g1Id,
+        paid_by: 'demo-user-rohit',
+        amount: 3200,
+        title: 'Shack Dinner & Refreshments',
+        category: 'Party/Dining',
+        split_type: 'equal',
+        expense_date: todayStr,
+        notes: 'Candolim beach live music shack',
+        created_at: new Date(Date.now() - 1 * 86400000).toISOString(),
+        sync_status: 'synced',
+      },
+      {
+        id: 'gexp-3',
+        group_id: g1Id,
+        paid_by: 'demo-user-sneha',
+        amount: 1600,
+        title: 'Scooty Rentals & Fuel',
+        category: 'Transport',
+        split_type: 'equal',
+        expense_date: todayStr,
+        notes: '4 Activa bikes for 2 days',
+        created_at: new Date().toISOString(),
+        sync_status: 'synced',
+      },
+    ],
+  };
+
+  const demoSplits: Record<string, GroupExpenseSplit[]> = {
+    [g1Id]: [
+      // gexp-1 (8400 / 4 = 2100 each)
+      { id: 's-1', group_expense_id: 'gexp-1', user_id: currentUserId, owed_amount: 2100, settled: false },
+      { id: 's-2', group_expense_id: 'gexp-1', user_id: 'demo-user-rohit', owed_amount: 2100, settled: false },
+      { id: 's-3', group_expense_id: 'gexp-1', user_id: 'demo-user-sneha', owed_amount: 2100, settled: false },
+      { id: 's-4', group_expense_id: 'gexp-1', user_id: 'demo-user-arjun', owed_amount: 2100, settled: false },
+      // gexp-2 (3200 / 4 = 800 each)
+      { id: 's-5', group_expense_id: 'gexp-2', user_id: currentUserId, owed_amount: 800, settled: false },
+      { id: 's-6', group_expense_id: 'gexp-2', user_id: 'demo-user-rohit', owed_amount: 800, settled: false },
+      { id: 's-7', group_expense_id: 'gexp-2', user_id: 'demo-user-sneha', owed_amount: 800, settled: false },
+      { id: 's-8', group_expense_id: 'gexp-2', user_id: 'demo-user-arjun', owed_amount: 800, settled: false },
+      // gexp-3 (1600 / 4 = 400 each)
+      { id: 's-9', group_expense_id: 'gexp-3', user_id: currentUserId, owed_amount: 400, settled: false },
+      { id: 's-10', group_expense_id: 'gexp-3', user_id: 'demo-user-rohit', owed_amount: 400, settled: false },
+      { id: 's-11', group_expense_id: 'gexp-3', user_id: 'demo-user-sneha', owed_amount: 400, settled: false },
+      { id: 's-12', group_expense_id: 'gexp-3', user_id: 'demo-user-arjun', owed_amount: 400, settled: false },
+    ],
+  };
+
+  return { demoGroups, demoMembers, demoExpenses, demoSplits };
+}
+
+export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, profile, isDemoMode } = useAuth();
+  const { addToast } = useExpenses();
+
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
+  const [groupExpenses, setGroupExpenses] = useState<GroupExpense[]>([]);
+  const [groupSplits, setGroupSplits] = useState<GroupExpenseSplit[]>([]);
+
+  const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  const currentUserId = user?.id || 'demo-user-12345';
+  const currentUserName = profile?.full_name || 'You';
+  const userCurrency = profile?.currency || '₹';
+
+  // Active Group object
+  const activeGroup = useMemo(() => {
+    return groups.find((g) => g.id === activeGroupId) || null;
+  }, [groups, activeGroupId]);
+
+  // Derived Metrics & Calculations
+  const metrics: GroupMetricSummary = useMemo(() => {
+    return calculateGroupMetrics(groupExpenses, groupSplits, groupMembers, currentUserId);
+  }, [groupExpenses, groupSplits, groupMembers, currentUserId]);
+
+  const memberSummaries: GroupMemberSummary[] = useMemo(() => {
+    return calculateMemberSummaries(groupExpenses, groupSplits, groupMembers);
+  }, [groupExpenses, groupSplits, groupMembers]);
+
+  const settlements: GroupSettlement[] = useMemo(() => {
+    return calculatePairwiseSettlements(groupExpenses, groupSplits, groupMembers);
+  }, [groupExpenses, groupSplits, groupMembers]);
+
+  // Update pending queue count
+  const refreshPendingCount = useCallback(async () => {
+    try {
+      const queue = await getPendingSyncQueue();
+      setPendingSyncCount(queue.length);
+    } catch {
+      // IndexedDB might not be supported in some environments
+    }
+  }, []);
+
+  // Flush Pending Sync Queue to Supabase sequentially
+  const syncPendingQueue = useCallback(async () => {
+    if (!isOnline || isSyncing || !isSupabaseConfigured || isDemoMode) return;
+
+    try {
+      setIsSyncing(true);
+      const queue = await getPendingSyncQueue();
+      if (queue.length === 0) {
+        setIsSyncing(false);
+        return;
+      }
+
+      for (const item of queue) {
+        try {
+          if (item.action === 'create_group') {
+            const payload = item.payload;
+            const { error } = await supabase.from('groups').insert({
+              id: payload.id,
+              name: payload.name,
+              description: payload.description,
+              currency: payload.currency,
+              join_code: payload.join_code,
+              created_by: payload.created_by,
+            });
+            if (error) throw error;
+            // Also insert admin membership
+            await supabase.from('group_members').insert({
+              group_id: payload.id,
+              user_id: payload.created_by,
+              role: 'admin',
+            });
+            await removeSyncItem(item.id);
+          } else if (item.action === 'create_expense') {
+            const payload = item.payload as GroupExpense;
+            const splits = (payload.splits || []) as GroupExpenseSplit[];
+
+            // Insert expense
+            const { error: expErr } = await supabase.from('group_expenses').insert({
+              id: payload.id,
+              group_id: payload.group_id,
+              paid_by: payload.paid_by,
+              amount: payload.amount,
+              title: payload.title,
+              category: payload.category,
+              split_type: payload.split_type,
+              expense_date: payload.expense_date,
+              notes: payload.notes,
+            });
+            if (expErr) throw expErr;
+
+            // Insert splits
+            if (splits.length > 0) {
+              const { error: splitErr } = await supabase.from('group_expense_splits').insert(
+                splits.map((s) => ({
+                  id: s.id,
+                  group_expense_id: payload.id,
+                  user_id: s.user_id,
+                  owed_amount: s.owed_amount,
+                  settled: s.settled,
+                }))
+              );
+              if (splitErr) throw splitErr;
+            }
+
+            // Update local state to mark synced
+            setGroupExpenses((prev) =>
+              prev.map((e) => (e.id === payload.id ? { ...e, sync_status: 'synced' } : e))
+            );
+            await removeSyncItem(item.id);
+          } else if (item.action === 'update_expense') {
+            const payload = item.payload;
+            const { error } = await supabase
+              .from('group_expenses')
+              .update({
+                title: payload.title,
+                amount: payload.amount,
+                category: payload.category,
+                split_type: payload.split_type,
+                expense_date: payload.expense_date,
+                notes: payload.notes,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', payload.id);
+            if (error) throw error;
+            await removeSyncItem(item.id);
+          } else if (item.action === 'delete_expense') {
+            const { error } = await supabase.from('group_expenses').delete().eq('id', item.payload.id);
+            if (error) throw error;
+            await removeSyncItem(item.id);
+          } else if (item.action === 'settle_split') {
+            const { error } = await supabase
+              .from('group_expense_splits')
+              .update({ settled: true })
+              .eq('id', item.payload.id);
+            if (error) throw error;
+            await removeSyncItem(item.id);
+          }
+        } catch (itemErr) {
+          console.error('Error syncing queue item:', item.action, itemErr);
+        }
+      }
+
+      await refreshPendingCount();
+      addToast({
+        type: 'success',
+        title: 'All Changes Synchronized',
+        message: 'Your offline group changes were uploaded to the cloud.',
+      });
+    } catch (err) {
+      console.error('Failed to sync offline queue:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isOnline, isSyncing, isDemoMode, refreshPendingCount, addToast]);
+
+  // Online / Offline network listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      addToast({
+        type: 'info',
+        title: 'Back Online',
+        message: 'Syncing pending group transactions with cloud...',
+      });
+      syncPendingQueue();
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      addToast({
+        type: 'warning',
+        title: 'Offline Mode Active',
+        message: 'You can continue logging expenses. They will sync automatically when reconnected.',
+      });
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncPendingQueue, addToast]);
+
+  // Load User Groups from Supabase or IndexedDB Cache / Demo
+  const refreshGroupData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      if (isDemoMode || !isSupabaseConfigured) {
+        const { demoGroups } = generateDemoGroups(currentUserId, currentUserName, userCurrency);
+        const cached = await getAllLocalGroups();
+        if (cached.length > 0) {
+          setGroups(cached);
+          if (!activeGroupId && cached.length > 0) setActiveGroupId(cached[0].id);
+        } else {
+          setGroups(demoGroups);
+          await saveLocalGroups(demoGroups);
+          if (!activeGroupId && demoGroups.length > 0) setActiveGroupId(demoGroups[0].id);
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      // Fetch from Supabase
+      if (user) {
+        // Query groups where user is a member or creator
+        const { data: memberRows, error: memberErr } = await supabase
+          .from('group_members')
+          .select('group_id')
+          .eq('user_id', user.id);
+
+        if (memberErr) throw memberErr;
+
+        const groupIds = (memberRows || []).map((r) => r.group_id);
+
+        if (groupIds.length > 0) {
+          const { data: groupsData, error: groupsErr } = await supabase
+            .from('groups')
+            .select('*')
+            .in('id', groupIds)
+            .order('created_at', { ascending: false });
+
+          if (groupsErr) throw groupsErr;
+
+          if (groupsData) {
+            const formatted = groupsData.map((g) => ({
+              ...g,
+              sync_status: 'synced' as const,
+            }));
+            setGroups(formatted);
+            await saveLocalGroups(formatted);
+            if (!activeGroupId && formatted.length > 0) setActiveGroupId(formatted[0].id);
+          }
+        } else {
+          setGroups([]);
+        }
+      }
+    } catch (err) {
+      console.warn('Falling back to local IndexedDB cache for groups:', err);
+      const cached = await getAllLocalGroups();
+      setGroups(cached);
+      if (!activeGroupId && cached.length > 0) setActiveGroupId(cached[0].id);
+    } finally {
+      setIsLoading(false);
+      refreshPendingCount();
+    }
+  }, [user, isDemoMode, currentUserId, currentUserName, userCurrency, activeGroupId, refreshPendingCount]);
+
+  // Load Active Group Details (Members, Expenses, Splits)
+  useEffect(() => {
+    if (!activeGroupId) {
+      setGroupMembers([]);
+      setGroupExpenses([]);
+      setGroupSplits([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    async function loadActiveGroupDetails() {
+      try {
+        if (isDemoMode || !isSupabaseConfigured) {
+          const { demoMembers, demoExpenses, demoSplits } = generateDemoGroups(
+            currentUserId,
+            currentUserName,
+            userCurrency
+          );
+          const localMembers = await getLocalGroupMembers(activeGroupId!);
+          const localExpenses = await getLocalGroupExpenses(activeGroupId!);
+
+          if (isMounted) {
+            setGroupMembers(localMembers.length > 0 ? localMembers : demoMembers[activeGroupId!] || []);
+            setGroupExpenses(localExpenses.length > 0 ? localExpenses : demoExpenses[activeGroupId!] || []);
+            setGroupSplits(demoSplits[activeGroupId!] || []);
+          }
+          return;
+        }
+
+        // Fetch members with profiles from Supabase
+        const { data: membersData, error: memErr } = await supabase
+          .from('group_members')
+          .select('*, profile:profiles(*)')
+          .eq('group_id', activeGroupId);
+
+        if (memErr) throw memErr;
+
+        // Fetch expenses with payer profiles
+        const { data: expensesData, error: expErr } = await supabase
+          .from('group_expenses')
+          .select('*, payer_profile:profiles(*)')
+          .eq('group_id', activeGroupId)
+          .order('expense_date', { ascending: false });
+
+        if (expErr) throw expErr;
+
+        // Fetch all splits for this group's expenses
+        const expenseIds = (expensesData || []).map((e) => e.id);
+        let splitsData: GroupExpenseSplit[] = [];
+
+        if (expenseIds.length > 0) {
+          const { data: sData, error: sErr } = await supabase
+            .from('group_expense_splits')
+            .select('*, user_profile:profiles(*)')
+            .in('group_expense_id', expenseIds);
+          if (sErr) throw sErr;
+          splitsData = (sData || []) as GroupExpenseSplit[];
+        }
+
+        if (isMounted) {
+          const formattedExpenses = (expensesData || []).map((e) => ({
+            ...e,
+            sync_status: 'synced' as const,
+            splits: splitsData.filter((s) => s.group_expense_id === e.id),
+          }));
+
+          setGroupMembers((membersData || []) as GroupMember[]);
+          setGroupExpenses(formattedExpenses);
+          setGroupSplits(splitsData);
+
+          // Update local IndexedDB cache
+          await saveLocalGroupMembers((membersData || []) as GroupMember[]);
+          await saveLocalGroupExpenses(formattedExpenses);
+        }
+      } catch (err) {
+        console.warn('Loading group details from local IndexedDB fallback:', err);
+        const localMembers = await getLocalGroupMembers(activeGroupId!);
+        const localExpenses = await getLocalGroupExpenses(activeGroupId!);
+        if (isMounted) {
+          setGroupMembers(localMembers);
+          setGroupExpenses(localExpenses);
+        }
+      }
+    }
+
+    loadActiveGroupDetails();
+
+    // Supabase Realtime Subscription for Live Collaborative Updates
+    let channel: any = null;
+    if (isSupabaseConfigured && !isDemoMode && activeGroupId) {
+      channel = supabase
+        .channel(`group-realtime-${activeGroupId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'group_expenses', filter: `group_id=eq.${activeGroupId}` },
+          () => {
+            loadActiveGroupDetails();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'group_expense_splits' },
+          () => {
+            loadActiveGroupDetails();
+          }
+        )
+        .subscribe();
+    }
+
+    return () => {
+      isMounted = false;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [activeGroupId, user, isDemoMode, currentUserId, currentUserName, userCurrency]);
+
+  // Initial Load on mount or auth change
+  useEffect(() => {
+    refreshGroupData();
+  }, [refreshGroupData]);
+
+  // CRUD: Create Group
+  const createGroup = async (
+    name: string,
+    description?: string,
+    currency: string = '₹'
+  ): Promise<{ group: Group | null; error: Error | null }> => {
+    const newId = generateUUID();
+    const joinCode = generateJoinCode();
+    const nowStr = new Date().toISOString();
+
+    const newGroup: Group = {
+      id: newId,
+      name,
+      description: description || null,
+      currency: currency || '₹',
+      join_code: joinCode,
+      created_by: currentUserId,
+      created_at: nowStr,
+      updated_at: nowStr,
+      member_count: 1,
+      sync_status: isOnline && isSupabaseConfigured && !isDemoMode ? 'synced' : 'pending',
+    };
+
+    const creatorMember: GroupMember = {
+      id: generateUUID(),
+      group_id: newId,
+      user_id: currentUserId,
+      role: 'admin',
+      joined_at: nowStr,
+      profile: {
+        id: currentUserId,
+        email: user?.email || 'you@expensetracker.app',
+        full_name: currentUserName,
+        currency,
+        pin_hash: null,
+        biometric_enabled: false,
+        biometric_credential_id: null,
+      },
+    };
+
+    // Optimistic state update
+    const updatedGroups = [newGroup, ...groups];
+    setGroups(updatedGroups);
+    setActiveGroupId(newId);
+
+    // Save to IndexedDB
+    await saveLocalGroup(newGroup);
+    await saveLocalGroupMembers([creatorMember]);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({
+        type: 'success',
+        title: 'Group Created',
+        message: `"${name}" group created. Share join code ${joinCode} with members.`,
+      });
+      return { group: newGroup, error: null };
+    }
+
+    if (!isOnline) {
+      // Enqueue sync mutation
+      await enqueueSyncItem({
+        id: generateUUID(),
+        temp_id: newId,
+        action: 'create_group',
+        entity: 'group',
+        payload: newGroup,
+        status: 'pending',
+        created_at: nowStr,
+        retry_count: 0,
+      });
+      await refreshPendingCount();
+      addToast({
+        type: 'info',
+        title: 'Created Offline (Queued)',
+        message: `Group created locally. It will sync automatically when back online.`,
+      });
+      return { group: newGroup, error: null };
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('create_group_with_admin', {
+        p_name: name,
+        p_description: description || null,
+        p_currency: currency,
+        p_join_code: joinCode,
+      });
+
+      if (error) throw error;
+
+      addToast({
+        type: 'success',
+        title: 'Group Created',
+        message: `"${name}" is ready. Share invite code ${data.join_code} with friends.`,
+      });
+      return { group: data as Group, error: null };
+    } catch (err: unknown) {
+      console.error('Supabase create_group error, falling back to direct table insert:', err);
+      // Fallback direct table inserts
+      try {
+        await supabase.from('groups').insert({
+          id: newId,
+          name,
+          description: description || null,
+          currency,
+          join_code: joinCode,
+          created_by: currentUserId,
+        });
+        await supabase.from('group_members').insert({
+          group_id: newId,
+          user_id: currentUserId,
+          role: 'admin',
+        });
+        addToast({
+          type: 'success',
+          title: 'Group Created',
+          message: `"${name}" created with invite code ${joinCode}.`,
+        });
+        return { group: newGroup, error: null };
+      } catch (fallbackErr) {
+        return { group: newGroup, error: fallbackErr as Error };
+      }
+    }
+  };
+
+  // CRUD: Join Group by Code
+  const joinGroup = async (joinCode: string): Promise<{ group: Group | null; error: Error | null }> => {
+    const cleanCode = joinCode.trim().toUpperCase();
+    if (!cleanCode) {
+      return { group: null, error: new Error('Please enter a valid join code') };
+    }
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      // Find or create in demo mode
+      let target = groups.find((g) => g.join_code.toUpperCase() === cleanCode);
+      if (!target) {
+        target = {
+          id: generateUUID(),
+          name: `Shared Group (${cleanCode})`,
+          description: 'Collaborative group space',
+          currency: userCurrency,
+          join_code: cleanCode,
+          created_by: 'demo-creator',
+          created_at: new Date().toISOString(),
+          member_count: 2,
+          sync_status: 'synced',
+        };
+        const updated = [target, ...groups];
+        setGroups(updated);
+        await saveLocalGroup(target);
+      }
+      setActiveGroupId(target.id);
+      addToast({
+        type: 'success',
+        title: 'Joined Group',
+        message: `Successfully joined "${target.name}".`,
+      });
+      return { group: target, error: null };
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('join_group_by_code', {
+        p_code: cleanCode,
+      });
+
+      if (error) throw error;
+
+      await refreshGroupData();
+      if (data && data.id) {
+        setActiveGroupId(data.id);
+      }
+
+      addToast({
+        type: 'success',
+        title: 'Joined Group!',
+        message: `You are now a member of "${data.name}".`,
+      });
+      return { group: data as Group, error: null };
+    } catch (err: unknown) {
+      const msg = (err as Error).message || 'Invalid join code. Could not join group.';
+      addToast({ type: 'error', title: 'Join Failed', message: msg });
+      return { group: null, error: err as Error };
+    }
+  };
+
+  // CRUD: Delete / Leave Group
+  const deleteGroup = async (groupId: string): Promise<{ error: Error | null }> => {
+    const updated = groups.filter((g) => g.id !== groupId);
+    setGroups(updated);
+    if (activeGroupId === groupId) {
+      setActiveGroupId(updated.length > 0 ? updated[0].id : null);
+    }
+    await deleteLocalGroup(groupId);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({ type: 'info', title: 'Group Removed', message: 'Group was removed.' });
+      return { error: null };
+    }
+
+    try {
+      const { error } = await supabase.from('groups').delete().eq('id', groupId);
+      if (error) throw error;
+      addToast({ type: 'info', title: 'Group Deleted', message: 'Group deleted successfully.' });
+      return { error: null };
+    } catch (err: unknown) {
+      return { error: err as Error };
+    }
+  };
+
+  // CRUD: Add Group Expense with Equal or Custom Splits & WhatsApp-style Sync Badge
+  const addGroupExpense = async (
+    expenseData: {
+      title: string;
+      amount: number;
+      category: string;
+      paid_by: string;
+      split_type: SplitType;
+      expense_date: string;
+      notes?: string;
+    },
+    customAllocations?: Record<string, number>
+  ): Promise<{ expense: GroupExpense | null; error: Error | null }> => {
+    if (!activeGroupId) {
+      return { expense: null, error: new Error('No active group selected') };
+    }
+
+    const newExpenseId = generateUUID();
+    const nowStr = new Date().toISOString();
+    const isOnlineSync = isOnline && isSupabaseConfigured && !isDemoMode;
+
+    const newExpense: GroupExpense = {
+      ...expenseData,
+      id: newExpenseId,
+      group_id: activeGroupId,
+      created_at: nowStr,
+      updated_at: nowStr,
+      sync_status: isOnlineSync ? 'synced' : 'pending',
+      payer_profile: groupMembers.find((m) => m.user_id === expenseData.paid_by)?.profile,
+    };
+
+    // Calculate splits across all members
+    const memberIds = groupMembers.map((m) => m.user_id);
+    const splitAllocations = computeSplitAllocations(
+      expenseData.amount,
+      memberIds,
+      expenseData.split_type,
+      customAllocations
+    );
+
+    const newSplits: GroupExpenseSplit[] = splitAllocations.map((alloc) => ({
+      id: generateUUID(),
+      group_expense_id: newExpenseId,
+      user_id: alloc.user_id,
+      owed_amount: alloc.owed_amount,
+      settled: alloc.user_id === expenseData.paid_by, // Automatically settled for payer
+      created_at: nowStr,
+      user_profile: groupMembers.find((m) => m.user_id === alloc.user_id)?.profile,
+    }));
+
+    newExpense.splits = newSplits;
+
+    // Optimistic UI updates
+    const updatedExpenses = [newExpense, ...groupExpenses];
+    const updatedSplits = [...newSplits, ...groupSplits];
+    setGroupExpenses(updatedExpenses);
+    setGroupSplits(updatedSplits);
+
+    // Save to IndexedDB
+    await saveLocalGroupExpense(newExpense);
+    await saveLocalExpenseSplits(newSplits);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({
+        type: 'success',
+        title: 'Group Expense Added',
+        message: `Logged ${activeGroup?.currency || userCurrency}${Number(expenseData.amount).toFixed(2)} under ${expenseData.title}.`,
+      });
+      return { expense: newExpense, error: null };
+    }
+
+    if (!isOnline) {
+      // Enqueue to offline sync queue with pending clock icon
+      await enqueueSyncItem({
+        id: generateUUID(),
+        temp_id: newExpenseId,
+        action: 'create_expense',
+        entity: 'expense',
+        payload: newExpense,
+        status: 'pending',
+        created_at: nowStr,
+        retry_count: 0,
+      });
+      await refreshPendingCount();
+      addToast({
+        type: 'info',
+        title: 'Expense Queued (Offline)',
+        message: 'Saved locally. Will sync automatically when network is restored.',
+      });
+      return { expense: newExpense, error: null };
+    }
+
+    try {
+      // Insert into Supabase
+      const { error: expError } = await supabase.from('group_expenses').insert({
+        id: newExpense.id,
+        group_id: newExpense.group_id,
+        paid_by: newExpense.paid_by,
+        amount: newExpense.amount,
+        title: newExpense.title,
+        category: newExpense.category,
+        split_type: newExpense.split_type,
+        expense_date: newExpense.expense_date,
+        notes: newExpense.notes || null,
+      });
+
+      if (expError) throw expError;
+
+      const { error: splitError } = await supabase.from('group_expense_splits').insert(
+        newSplits.map((s) => ({
+          id: s.id,
+          group_expense_id: s.group_expense_id,
+          user_id: s.user_id,
+          owed_amount: s.owed_amount,
+          settled: s.settled,
+        }))
+      );
+
+      if (splitError) throw splitError;
+
+      addToast({
+        type: 'success',
+        title: 'Group Expense Saved',
+        message: `Logged ${activeGroup?.currency || userCurrency}${Number(expenseData.amount).toFixed(2)} split across ${memberIds.length} members.`,
+      });
+      return { expense: newExpense, error: null };
+    } catch (err: unknown) {
+      console.error('Supabase group expense save error, queued offline:', err);
+      // Fallback enqueue
+      await enqueueSyncItem({
+        id: generateUUID(),
+        temp_id: newExpenseId,
+        action: 'create_expense',
+        entity: 'expense',
+        payload: newExpense,
+        status: 'pending',
+        created_at: nowStr,
+        retry_count: 0,
+      });
+      await refreshPendingCount();
+      return { expense: newExpense, error: null };
+    }
+  };
+
+  // CRUD: Update Group Expense
+  const updateGroupExpense = async (
+    expenseId: string,
+    updates: Partial<GroupExpense>
+  ): Promise<{ error: Error | null }> => {
+    const updatedExpenses = groupExpenses.map((exp) =>
+      exp.id === expenseId ? { ...exp, ...updates, updated_at: new Date().toISOString() } : exp
+    );
+    setGroupExpenses(updatedExpenses);
+
+    const target = updatedExpenses.find((e) => e.id === expenseId);
+    if (target) await saveLocalGroupExpense(target);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({ type: 'success', title: 'Expense Updated', message: 'Group expense updated.' });
+      return { error: null };
+    }
+
+    if (!isOnline) {
+      await enqueueSyncItem({
+        id: generateUUID(),
+        action: 'update_expense',
+        entity: 'expense',
+        payload: { id: expenseId, ...updates },
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        retry_count: 0,
+      });
+      await refreshPendingCount();
+      return { error: null };
+    }
+
+    try {
+      const { error } = await supabase
+        .from('group_expenses')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('id', expenseId);
+      if (error) throw error;
+      addToast({ type: 'success', title: 'Expense Updated', message: 'Details updated.' });
+      return { error: null };
+    } catch (err: unknown) {
+      return { error: err as Error };
+    }
+  };
+
+  // CRUD: Delete Group Expense
+  const deleteGroupExpense = async (expenseId: string): Promise<{ error: Error | null }> => {
+    const updatedExpenses = groupExpenses.filter((e) => e.id !== expenseId);
+    const updatedSplits = groupSplits.filter((s) => s.group_expense_id !== expenseId);
+    setGroupExpenses(updatedExpenses);
+    setGroupSplits(updatedSplits);
+
+    await deleteLocalGroupExpense(expenseId);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({ type: 'info', title: 'Expense Deleted', message: 'Group expense removed.' });
+      return { error: null };
+    }
+
+    if (!isOnline) {
+      await enqueueSyncItem({
+        id: generateUUID(),
+        action: 'delete_expense',
+        entity: 'expense',
+        payload: { id: expenseId },
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        retry_count: 0,
+      });
+      await refreshPendingCount();
+      return { error: null };
+    }
+
+    try {
+      const { error } = await supabase.from('group_expenses').delete().eq('id', expenseId);
+      if (error) throw error;
+      addToast({ type: 'info', title: 'Expense Deleted', message: 'Group expense removed.' });
+      return { error: null };
+    } catch (err: unknown) {
+      return { error: err as Error };
+    }
+  };
+
+  // Settle individual split
+  const settleExpenseSplit = async (splitId: string): Promise<{ error: Error | null }> => {
+    const updatedSplits = groupSplits.map((s) => (s.id === splitId ? { ...s, settled: true } : s));
+    setGroupSplits(updatedSplits);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({ type: 'success', title: 'Split Settled', message: 'Marked as settled.' });
+      return { error: null };
+    }
+
+    if (!isOnline) {
+      await enqueueSyncItem({
+        id: generateUUID(),
+        action: 'settle_split',
+        entity: 'split',
+        payload: { id: splitId },
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        retry_count: 0,
+      });
+      await refreshPendingCount();
+      return { error: null };
+    }
+
+    try {
+      const { error } = await supabase
+        .from('group_expense_splits')
+        .update({ settled: true })
+        .eq('id', splitId);
+      if (error) throw error;
+      addToast({ type: 'success', title: 'Settled', message: 'Debt share marked settled.' });
+      return { error: null };
+    } catch (err: unknown) {
+      return { error: err as Error };
+    }
+  };
+
+  return (
+    <GroupContext.Provider
+      value={{
+        groups,
+        activeGroup,
+        groupMembers,
+        groupExpenses,
+        groupSplits,
+        metrics,
+        memberSummaries,
+        settlements,
+        isOnline,
+        isSyncing,
+        pendingSyncCount,
+        isLoading,
+        setActiveGroupId,
+        createGroup,
+        joinGroup,
+        deleteGroup,
+        addGroupExpense,
+        updateGroupExpense,
+        deleteGroupExpense,
+        settleExpenseSplit,
+        syncPendingQueue,
+        refreshGroupData,
+      }}
+    >
+      {children}
+    </GroupContext.Provider>
+  );
+};
+
+export function useGroups() {
+  const context = useContext(GroupContext);
+  if (!context) {
+    throw new Error('useGroups must be used within a GroupProvider');
+  }
+  return context;
+}

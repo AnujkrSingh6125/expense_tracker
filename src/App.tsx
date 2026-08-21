@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { ThemeProvider } from './context/ThemeContext';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { SecurityProvider } from './context/SecurityContext';
 import { ExpenseProvider } from './context/ExpenseContext';
-import { ActiveTab, Expense } from './types';
+import { GroupProvider, useGroups } from './context/GroupContext';
+import { ActiveTab, AppSpace, Expense, GroupExpense } from './types';
 
+// Auth Screen
 import { AuthScreen } from './components/auth/AuthScreen';
-import { useAuth } from './context/AuthContext';
+import { ResetPasswordModal } from './components/auth/ResetPasswordModal';
 
 // Layout & UI
 import { Navbar } from './components/layout/Navbar';
@@ -22,7 +24,15 @@ import { EmailVerificationBanner } from './components/auth/EmailVerificationBann
 import { ExpenseModal } from './components/expenses/ExpenseModal';
 import { BudgetModal } from './components/budget/BudgetModal';
 
-// Views
+// Group Modals & Views
+import { CreateGroupModal } from './components/groups/CreateGroupModal';
+import { JoinGroupModal } from './components/groups/JoinGroupModal';
+import { GroupExpenseModal } from './components/groups/GroupExpenseModal';
+import { GroupMembersModal } from './components/groups/GroupMembersModal';
+import { GroupListView } from './components/groups/GroupListView';
+import { GroupDashboardView } from './components/groups/GroupDashboardView';
+
+// Personal Views
 import { DashboardView } from './components/dashboard/DashboardView';
 import { AnalyticsView } from './components/analytics/AnalyticsView';
 import { ExpenseList } from './components/expenses/ExpenseList';
@@ -30,14 +40,26 @@ import { BudgetList } from './components/budget/BudgetList';
 import { SettingsView } from './components/settings/SettingsView';
 
 const MainLayout: React.FC = () => {
+  // Navigation & Workspace State
+  const [appSpace, setAppSpace] = useState<AppSpace>('personal');
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
 
-  // Modal States
+  const { isPasswordRecovery, setIsPasswordRecovery } = useAuth();
+  const { activeGroup, setActiveGroupId } = useGroups();
+
+  // Personal Modal States
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState<boolean>(false);
   const [isBudgetModalOpen, setIsBudgetModalOpen] = useState<boolean>(false);
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
+
+  // Group Modal States
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState<boolean>(false);
+  const [isJoinGroupOpen, setIsJoinGroupOpen] = useState<boolean>(false);
+  const [isGroupExpenseOpen, setIsGroupExpenseOpen] = useState<boolean>(false);
+  const [isGroupMembersOpen, setIsGroupMembersOpen] = useState<boolean>(false);
+  const [groupExpenseToEdit, setGroupExpenseToEdit] = useState<GroupExpense | null>(null);
 
   const handleOpenAddExpense = () => {
     setExpenseToEdit(null);
@@ -47,6 +69,16 @@ const MainLayout: React.FC = () => {
   const handleOpenEditExpense = (expense: Expense) => {
     setExpenseToEdit(expense);
     setIsExpenseModalOpen(true);
+  };
+
+  const handleOpenAddGroupExpense = () => {
+    setGroupExpenseToEdit(null);
+    setIsGroupExpenseOpen(true);
+  };
+
+  const handleOpenEditGroupExpense = (expense: GroupExpense) => {
+    setGroupExpenseToEdit(expense);
+    setIsGroupExpenseOpen(true);
   };
 
   return (
@@ -62,7 +94,10 @@ const MainLayout: React.FC = () => {
 
       {/* Top Navbar */}
       <Navbar
+        appSpace={appSpace}
+        setAppSpace={setAppSpace}
         onOpenAddExpense={handleOpenAddExpense}
+        onOpenAddGroupExpense={handleOpenAddGroupExpense}
         onOpenSecuritySettings={() => setIsSecurityModalOpen(true)}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
       />
@@ -71,72 +106,98 @@ const MainLayout: React.FC = () => {
       <div className="flex-1 flex max-w-7xl w-full mx-auto">
         {/* Desktop Sidebar Navigation */}
         <Sidebar
+          appSpace={appSpace}
+          setAppSpace={setAppSpace}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           onOpenSecuritySettings={() => setIsSecurityModalOpen(true)}
+          onOpenCreateGroup={() => setIsCreateGroupOpen(true)}
+          onOpenJoinGroup={() => setIsJoinGroupOpen(true)}
         />
 
         {/* Dynamic Main Content View */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 max-w-full">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              onOpenAddExpense={handleOpenAddExpense}
-              onOpenEditExpense={handleOpenEditExpense}
-              onOpenBudgetModal={() => setIsBudgetModalOpen(true)}
-              onViewAllExpenses={() => setActiveTab('expenses')}
-            />
-          )}
-
-          {activeTab === 'analytics' && <AnalyticsView />}
-
-          {activeTab === 'expenses' && (
-            <div className="space-y-4 pb-12">
-              <div>
-                <h2 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100">
-                  Transactions Ledger
-                </h2>
-                <p className="text-xs sm:text-sm text-surface-500 dark:text-surface-400 mt-1">
-                  Search, multi-filter, inspect, export, or edit all recorded expenses
-                </p>
-              </div>
-              <ExpenseList
-                onOpenAddExpense={handleOpenAddExpense}
-                onOpenEditExpense={handleOpenEditExpense}
+          {appSpace === 'groups' ? (
+            /* COLLABORATIVE GROUP EXPENSE SPACES */
+            activeGroup ? (
+              <GroupDashboardView
+                onBack={() => setActiveGroupId(null)}
+                onOpenAddExpense={handleOpenAddGroupExpense}
+                onOpenEditExpense={handleOpenEditGroupExpense}
+                onOpenMembersModal={() => setIsGroupMembersOpen(true)}
               />
-            </div>
-          )}
+            ) : (
+              <GroupListView
+                onOpenCreateGroup={() => setIsCreateGroupOpen(true)}
+                onOpenJoinGroup={() => setIsJoinGroupOpen(true)}
+              />
+            )
+          ) : (
+            /* PERSONAL EXPENSE TRACKER VIEWS */
+            <>
+              {activeTab === 'dashboard' && (
+                <DashboardView
+                  onOpenAddExpense={handleOpenAddExpense}
+                  onOpenEditExpense={handleOpenEditExpense}
+                  onOpenBudgetModal={() => setIsBudgetModalOpen(true)}
+                  onViewAllExpenses={() => setActiveTab('expenses')}
+                />
+              )}
 
-          {activeTab === 'budgets' && (
-            <div className="space-y-4 pb-12">
-              <div>
-                <h2 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100">
-                  Monthly Budget Management
-                </h2>
-                <p className="text-xs sm:text-sm text-surface-500 dark:text-surface-400 mt-1">
-                  Establish spending thresholds and monitor color-shifting budget alerts
-                </p>
-              </div>
-              <BudgetList onOpenBudgetModal={() => setIsBudgetModalOpen(true)} />
-            </div>
-          )}
+              {activeTab === 'analytics' && <AnalyticsView />}
 
-          {activeTab === 'settings' && (
-            <SettingsView
-              onOpenSecuritySettings={() => setIsSecurityModalOpen(true)}
-              onOpenAuthModal={() => setIsAuthModalOpen(true)}
-            />
+              {activeTab === 'expenses' && (
+                <div className="space-y-4 pb-12">
+                  <div>
+                    <h2 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100">
+                      Transactions Ledger
+                    </h2>
+                    <p className="text-xs sm:text-sm text-surface-500 dark:text-surface-400 mt-1">
+                      Search, multi-filter, inspect, export, or edit all recorded personal expenses
+                    </p>
+                  </div>
+                  <ExpenseList
+                    onOpenAddExpense={handleOpenAddExpense}
+                    onOpenEditExpense={handleOpenEditExpense}
+                  />
+                </div>
+              )}
+
+              {activeTab === 'budgets' && (
+                <div className="space-y-4 pb-12">
+                  <div>
+                    <h2 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100">
+                      Monthly Budget Management
+                    </h2>
+                    <p className="text-xs sm:text-sm text-surface-500 dark:text-surface-400 mt-1">
+                      Establish spending thresholds and monitor color-shifting budget alerts
+                    </p>
+                  </div>
+                  <BudgetList onOpenBudgetModal={() => setIsBudgetModalOpen(true)} />
+                </div>
+              )}
+
+              {activeTab === 'settings' && (
+                <SettingsView
+                  onOpenSecuritySettings={() => setIsSecurityModalOpen(true)}
+                  onOpenAuthModal={() => setIsAuthModalOpen(true)}
+                />
+              )}
+            </>
           )}
         </main>
       </div>
 
       {/* Mobile Bottom Navigation Bar */}
       <MobileNav
+        appSpace={appSpace}
+        setAppSpace={setAppSpace}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onOpenAddExpense={handleOpenAddExpense}
+        onOpenAddExpense={appSpace === 'groups' ? handleOpenAddGroupExpense : handleOpenAddExpense}
       />
 
-      {/* Modals */}
+      {/* Personal Modals */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
@@ -160,12 +221,44 @@ const MainLayout: React.FC = () => {
         isOpen={isBudgetModalOpen}
         onClose={() => setIsBudgetModalOpen(false)}
       />
+
+      {/* Collaborative Group Modals */}
+      <CreateGroupModal
+        isOpen={isCreateGroupOpen}
+        onClose={() => setIsCreateGroupOpen(false)}
+      />
+
+      <JoinGroupModal
+        isOpen={isJoinGroupOpen}
+        onClose={() => setIsJoinGroupOpen(false)}
+      />
+
+      <GroupExpenseModal
+        isOpen={isGroupExpenseOpen}
+        onClose={() => {
+          setIsGroupExpenseOpen(false);
+          setGroupExpenseToEdit(null);
+        }}
+        expenseToEdit={groupExpenseToEdit}
+      />
+
+      <GroupMembersModal
+        isOpen={isGroupMembersOpen}
+        onClose={() => setIsGroupMembersOpen(false)}
+      />
+
+      {/* Password Reset Recovery Modal */}
+      <ResetPasswordModal
+        isOpen={isPasswordRecovery}
+        onClose={() => setIsPasswordRecovery(false)}
+        initialMode="set_new_password"
+      />
     </div>
   );
 };
 
 const AppContent: React.FC = () => {
-  const { user, isDemoMode, isLoading } = useAuth();
+  const { user, isDemoMode, isLoading, isPasswordRecovery } = useAuth();
 
   if (isLoading) {
     return (
@@ -178,25 +271,25 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // Show AuthScreen if user is not authenticated and not in demo mode
-  if (!user && !isDemoMode) {
+  // Show AuthScreen if user is not authenticated, not in recovery, and not in demo mode
+  if (!user && !isDemoMode && !isPasswordRecovery) {
     return <AuthScreen />;
   }
 
-  return (
-    <SecurityProvider>
-      <ExpenseProvider>
-        <MainLayout />
-      </ExpenseProvider>
-    </SecurityProvider>
-  );
+  return <MainLayout />;
 };
 
 export function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <AppContent />
+        <ExpenseProvider>
+          <SecurityProvider>
+            <GroupProvider>
+              <AppContent />
+            </GroupProvider>
+          </SecurityProvider>
+        </ExpenseProvider>
       </AuthProvider>
     </ThemeProvider>
   );

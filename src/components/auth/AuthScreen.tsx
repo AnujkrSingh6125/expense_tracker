@@ -4,6 +4,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { CURRENCIES } from '../../lib/constants';
+import { ResetPasswordModal } from './ResetPasswordModal';
 import {
   Wallet,
   Mail,
@@ -30,6 +31,7 @@ export const AuthScreen: React.FC = () => {
   const [fullName, setFullName] = useState('');
   const [currency, setCurrency] = useState('₹');
   const [isLoading, setIsLoading] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signupSuccessUnverified, setSignupSuccessUnverified] = useState(false);
 
@@ -307,16 +309,30 @@ export const AuthScreen: React.FC = () => {
                   required
                 />
 
-                <Input
-                  label="Password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  leftIcon={<Lock className="w-4 h-4 text-surface-400" />}
-                  required
-                  helperText={mode === 'signup' ? 'Must be at least 6 characters' : undefined}
-                />
+                <div className="space-y-1">
+                  <Input
+                    label="Password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    leftIcon={<Lock className="w-4 h-4 text-surface-400" />}
+                    required
+                    helperText={mode === 'signup' ? 'Must be at least 6 characters' : undefined}
+                  />
+
+                  {mode === 'signin' && (
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsResetModalOpen(true)}
+                        className="text-xs text-brand-600 dark:text-brand-400 hover:underline font-semibold"
+                      >
+                        Forgot Password?
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 <Button
                   type="submit"
@@ -369,6 +385,11 @@ export const AuthScreen: React.FC = () => {
           ExpenseTracker • Personal Finance & Security Suite
         </div>
       </div>
+
+      <ResetPasswordModal
+        isOpen={isResetModalOpen}
+        onClose={() => setIsResetModalOpen(false)}
+      />
     </div>
   );
 };

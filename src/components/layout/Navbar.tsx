@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useSecurity } from '../../context/SecurityContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useGroups } from '../../context/GroupContext';
 import { CURRENCIES } from '../../lib/constants';
+import { AppSpace } from '../../types';
 import { MonthYearPicker } from './MonthYearPicker';
 import { Button } from '../ui/Button';
 import {
@@ -15,31 +17,41 @@ import {
   User,
   LogOut,
   Wallet,
+  Users,
+  WifiOff,
+  RefreshCw,
 } from 'lucide-react';
 
 interface NavbarProps {
+  appSpace: AppSpace;
+  setAppSpace: (space: AppSpace) => void;
   onOpenAddExpense: () => void;
+  onOpenAddGroupExpense: () => void;
   onOpenSecuritySettings: () => void;
   onOpenAuthModal: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
+  appSpace,
+  setAppSpace,
   onOpenAddExpense,
+  onOpenAddGroupExpense,
   onOpenSecuritySettings,
   onOpenAuthModal,
 }) => {
   const { user, profile, updateProfile, isDemoMode, signOut } = useAuth();
   const { lockApp, hasSecurityConfigured } = useSecurity();
   const { theme, toggleTheme } = useTheme();
+  const { isOnline, isSyncing, pendingSyncCount, activeGroup } = useGroups();
 
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-30 w-full bg-white/80 dark:bg-surface-900/80 backdrop-blur-md border-b border-surface-200 dark:border-surface-800 transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-        {/* Brand Header */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-500 text-white flex items-center justify-center shadow-md shadow-brand-500/25">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3 sm:gap-4">
+        {/* Brand Header & Space Switcher */}
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-500 text-white flex items-center justify-center shadow-md shadow-brand-500/25 shrink-0">
             <Wallet className="w-5 h-5" />
           </div>
           <div>
@@ -53,26 +65,85 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-surface-400 hidden sm:block">Smart Budget & Domain Analytics</p>
+            <p className="text-[11px] text-surface-400 hidden sm:block">
+              {appSpace === 'groups'
+                ? activeGroup
+                  ? `Group: ${activeGroup.name}`
+                  : 'Collaborative Groups'
+                : 'Smart Budget & Domain Analytics'}
+            </p>
           </div>
         </div>
 
-        {/* Center: Month/Year selector */}
-        <div className="hidden md:flex items-center">
-          <MonthYearPicker />
+        {/* Center: Month/Year selector (in personal mode) OR Space Switcher Pill */}
+        <div className="hidden md:flex items-center gap-3">
+          {appSpace === 'personal' ? (
+            <MonthYearPicker />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAppSpace('personal')}
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-100 dark:bg-surface-800 text-xs font-bold text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-700 transition-colors"
+            >
+              <Users className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+              <span>{activeGroup ? activeGroup.name : 'All Groups'}</span>
+              <span className="text-[10px] text-surface-400 font-normal ml-1">(Click for Personal)</span>
+            </button>
+          )}
         </div>
 
         {/* Right Action Icons */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Network & Sync Indicator */}
+          <div className="hidden sm:flex items-center">
+            {isSyncing ? (
+              <span
+                title="Synchronizing offline queue with Supabase"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400 text-xs font-semibold"
+              >
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span className="hidden md:inline">Syncing...</span>
+              </span>
+            ) : !isOnline ? (
+              <span
+                title="Offline mode active. Changes queued locally."
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-semibold"
+              >
+                <WifiOff className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Offline</span>
+                {pendingSyncCount > 0 && <span>({pendingSyncCount})</span>}
+              </span>
+            ) : (
+              <span
+                title="Connected & cloud-synced"
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-emerald-600 dark:text-emerald-400 text-xs font-medium"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="hidden lg:inline text-[11px] text-surface-400">Live</span>
+              </span>
+            )}
+          </div>
+
           {/* Quick Add Expense Button */}
-          <Button
-            size="sm"
-            onClick={onOpenAddExpense}
-            leftIcon={<Plus className="w-4 h-4" />}
-            className="hidden sm:inline-flex bg-brand-600 hover:bg-brand-700"
-          >
-            Add Expense
-          </Button>
+          {appSpace === 'personal' ? (
+            <Button
+              size="sm"
+              onClick={onOpenAddExpense}
+              leftIcon={<Plus className="w-4 h-4" />}
+              className="hidden sm:inline-flex bg-brand-600 hover:bg-brand-700 font-bold"
+            >
+              Add Expense
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              onClick={onOpenAddGroupExpense}
+              leftIcon={<Plus className="w-4 h-4" />}
+              className="hidden sm:inline-flex bg-brand-600 hover:bg-brand-700 font-bold"
+            >
+              Log Group Spend
+            </Button>
+          )}
 
           {/* Quick lock button */}
           <button

@@ -108,3 +108,112 @@ export interface MonthlySpendingHistory {
 }
 
 export type ActiveTab = 'dashboard' | 'analytics' | 'expenses' | 'budgets' | 'settings';
+
+export type AppSpace = 'personal' | 'groups';
+
+// ==========================================
+// Collaborative Group Expense Types
+// ==========================================
+
+export type SplitType = 'equal' | 'custom' | 'percentage';
+
+export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
+
+export type SyncAction =
+  | 'create_expense'
+  | 'update_expense'
+  | 'delete_expense'
+  | 'create_group'
+  | 'join_group'
+  | 'settle_split';
+
+export interface Group {
+  id: string;
+  name: string;
+  description: string | null;
+  currency: string;
+  join_code: string;
+  created_by: string;
+  created_at: string;
+  updated_at?: string;
+  member_count?: number;
+  user_net_balance?: number;
+  sync_status?: SyncStatus;
+}
+
+export interface GroupMember {
+  id: string;
+  group_id: string;
+  user_id: string;
+  role: 'admin' | 'member';
+  joined_at: string;
+  profile?: Profile;
+}
+
+export interface GroupExpenseSplit {
+  id: string;
+  group_expense_id: string;
+  user_id: string;
+  owed_amount: number;
+  settled: boolean;
+  created_at?: string;
+  user_profile?: Profile;
+}
+
+export interface GroupExpense {
+  id: string;
+  group_id: string;
+  paid_by: string;
+  amount: number;
+  title: string;
+  category: string;
+  split_type: SplitType;
+  expense_date: string; // YYYY-MM-DD
+  notes?: string | null;
+  created_at: string;
+  updated_at?: string;
+  sync_status?: SyncStatus;
+  temp_id?: string;
+  payer_profile?: Profile;
+  splits?: GroupExpenseSplit[];
+}
+
+export interface GroupSettlement {
+  from_user_id: string;
+  from_user_name: string;
+  to_user_id: string;
+  to_user_name: string;
+  amount: number;
+}
+
+export interface GroupMemberSummary {
+  user_id: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'member';
+  total_paid: number;
+  total_owed: number;
+  net_balance: number;
+  percentage_of_total: number;
+}
+
+export interface GroupMetricSummary {
+  total_group_spend: number;
+  user_total_paid: number;
+  user_total_owed: number;
+  user_net_balance: number;
+  expense_count: number;
+  member_count: number;
+}
+
+export interface SyncQueueItem {
+  id: string;
+  temp_id?: string;
+  action: SyncAction;
+  entity: 'group' | 'member' | 'expense' | 'split';
+  payload: any;
+  status: SyncStatus;
+  created_at: string;
+  retry_count: number;
+  error_message?: string;
+}

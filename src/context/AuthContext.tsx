@@ -14,6 +14,10 @@ interface AuthContextType {
   signUpWithEmail: (email: string, password: string, fullName: string, currency?: string) => Promise<{ error: AuthError | Error | null; unverified?: boolean }>;
   signOut: () => Promise<void>;
   resendVerificationEmail: (email: string) => Promise<{ error: AuthError | Error | null }>;
+  resetPasswordEmail: (email: string) => Promise<{ error: Error | null }>;
+  updatePassword: (password: string) => Promise<{ error: Error | null }>;
+  isPasswordRecovery: boolean;
+  setIsPasswordRecovery: (val: boolean) => void;
   updateProfile: (updates: Partial<Profile>) => Promise<{ error: Error | null }>;
   deleteAccount: () => Promise<{ error: Error | null }>;
   enableDemoMode: () => void;
@@ -39,6 +43,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(() => {
+    return window.location.hash.includes('type=recovery') || window.location.hash.includes('access_token');
+  });
   const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
     return localStorage.getItem('et_demo_active') === 'true';
   });
@@ -142,9 +149,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true);
+      }
       if (session?.user) {
         fetchProfile(session.user.id, session.user.email || '');
       } else {
@@ -252,6 +262,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email,
     });
     return { error };
+  };
+
+  const resetPasswordEmail = async (email: string): Promise<{ error: Error | null }> => {
+    if (!isSupabaseConfigured) {
+      return { error: null };
+    }
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/#reset-password`,
+      });
+      if (error) throw error;
+      return { error: null };
+    } catch (err: unknown) {
+      return { error: err as Error };
+    }
+  };
+
+  const updatePassword = async (password: string): Promise<{ error: Error | null }> => {
+    if (!isSupabaseConfigured) {
+      return { error: null };
+    }
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      setIsPasswordRecovery(false);
+      // Clean URL hash
+      if (window.location.hash) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+      return { error: null };
+    } catch (err: unknown) {
+      return { error: err as Error };
+    }
   };
 
   const updateProfile = async (updates: Partial<Profile>) => {
@@ -395,6 +438,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signUpWithEmail,
         signOut,
         resendVerificationEmail,
+        resetPasswordEmail,
+        updatePassword,
+        isPasswordRecovery,
+        setIsPasswordRecovery,
         updateProfile,
         deleteAccount,
         enableDemoMode,

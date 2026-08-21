@@ -1,15 +1,19 @@
 import React from 'react';
-import { ActiveTab } from '../../types';
-import { LayoutDashboard, PieChart, ReceiptText, Plus, Settings } from 'lucide-react';
+import { ActiveTab, AppSpace } from '../../types';
+import { LayoutDashboard, PieChart, Plus, Settings, Users } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface MobileNavProps {
+  appSpace: AppSpace;
+  setAppSpace: (space: AppSpace) => void;
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   onOpenAddExpense: () => void;
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({
+  appSpace,
+  setAppSpace,
   activeTab,
   setActiveTab,
   onOpenAddExpense,
@@ -19,10 +23,13 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       <div className="flex items-center justify-around">
         {/* Dashboard */}
         <button
-          onClick={() => setActiveTab('dashboard')}
+          onClick={() => {
+            setAppSpace('personal');
+            setActiveTab('dashboard');
+          }}
           className={cn(
             'flex flex-col items-center gap-1 p-1 rounded-xl transition-colors',
-            activeTab === 'dashboard'
+            appSpace === 'personal' && activeTab === 'dashboard'
               ? 'text-brand-600 dark:text-brand-400'
               : 'text-surface-500 hover:text-surface-800 dark:hover:text-surface-200'
           )}
@@ -33,10 +40,13 @@ export const MobileNav: React.FC<MobileNavProps> = ({
 
         {/* Analytics */}
         <button
-          onClick={() => setActiveTab('analytics')}
+          onClick={() => {
+            setAppSpace('personal');
+            setActiveTab('analytics');
+          }}
           className={cn(
             'flex flex-col items-center gap-1 p-1 rounded-xl transition-colors',
-            activeTab === 'analytics'
+            appSpace === 'personal' && activeTab === 'analytics'
               ? 'text-brand-600 dark:text-brand-400'
               : 'text-surface-500 hover:text-surface-800 dark:hover:text-surface-200'
           )}
@@ -55,26 +65,29 @@ export const MobileNav: React.FC<MobileNavProps> = ({
           </button>
         </div>
 
-        {/* Transactions */}
+        {/* Collaborative Groups */}
         <button
-          onClick={() => setActiveTab('expenses')}
+          onClick={() => setAppSpace('groups')}
           className={cn(
             'flex flex-col items-center gap-1 p-1 rounded-xl transition-colors',
-            activeTab === 'expenses'
+            appSpace === 'groups'
               ? 'text-brand-600 dark:text-brand-400'
               : 'text-surface-500 hover:text-surface-800 dark:hover:text-surface-200'
           )}
         >
-          <ReceiptText className="w-5 h-5" />
-          <span className="text-[10px] font-semibold">Activity</span>
+          <Users className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Groups</span>
         </button>
 
-        {/* Settings / Budgets */}
+        {/* Settings */}
         <button
-          onClick={() => setActiveTab('settings')}
+          onClick={() => {
+            setAppSpace('personal');
+            setActiveTab('settings');
+          }}
           className={cn(
             'flex flex-col items-center gap-1 p-1 rounded-xl transition-colors',
-            activeTab === 'settings'
+            appSpace === 'personal' && activeTab === 'settings'
               ? 'text-brand-600 dark:text-brand-400'
               : 'text-surface-500 hover:text-surface-800 dark:hover:text-surface-200'
           )}

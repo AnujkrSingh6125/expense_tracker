@@ -75,6 +75,8 @@ export const STANDARD_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+export const EXPENSE_CATEGORIES = STANDARD_CATEGORIES;
+
 export const PAYMENT_METHODS: { id: PaymentMethod; label: string; icon: string }[] = [
   { id: 'Card', label: 'Credit / Debit Card', icon: 'CreditCard' },
   { id: 'UPI', label: 'UPI / Instant Pay', icon: 'Smartphone' },

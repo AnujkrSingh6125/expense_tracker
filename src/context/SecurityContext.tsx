@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './AuthContext';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { hashPin, verifyPin } from '../lib/crypto';
 import {
   isWebAuthnSupported,
@@ -18,6 +19,8 @@ interface SecurityContextType {
   unlockWithBiometrics: () => Promise<{ success: boolean; error?: string }>;
   setupPin: (pin: string) => Promise<{ success: boolean; error?: string }>;
   removePin: () => Promise<{ success: boolean; error?: string }>;
+  resetPinWithPassword: (password: string, newPin: string) => Promise<{ success: boolean; error?: string }>;
+  resetPinDirect: (newPin: string) => Promise<{ success: boolean; error?: string }>;
   setupBiometrics: () => Promise<{ success: boolean; error?: string }>;
   disableBiometrics: () => Promise<{ success: boolean; error?: string }>;
   hasSecurityConfigured: boolean;
@@ -152,6 +155,51 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const resetPinWithPassword = async (
+    password: string,
+    newPin: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+      return { success: false, error: 'New PIN must be exactly 4 digits.' };
+    }
+
+    try {
+      // In Supabase mode, verify user password
+      if (user && user.email && isSupabaseConfigured) {
+        const { error: signInErr } = await supabase.auth.signInWithPassword({
+          email: user.email,
+          password,
+        });
+        if (signInErr) {
+          return { success: false, error: 'Incorrect account password. Verification failed.' };
+        }
+      }
+
+      const hashed = await hashPin(newPin);
+      const res = await updateProfile({ pin_hash: hashed });
+      if (res.error) throw res.error;
+      setIsLocked(false);
+      return { success: true };
+    } catch (err: unknown) {
+      return { success: false, error: (err as Error).message || 'Failed to reset PIN.' };
+    }
+  };
+
+  const resetPinDirect = async (newPin: string): Promise<{ success: boolean; error?: string }> => {
+    if (!newPin || newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+      return { success: false, error: 'New PIN must be exactly 4 digits.' };
+    }
+    try {
+      const hashed = await hashPin(newPin);
+      const res = await updateProfile({ pin_hash: hashed });
+      if (res.error) throw res.error;
+      setIsLocked(false);
+      return { success: true };
+    } catch (err: unknown) {
+      return { success: false, error: (err as Error).message || 'Failed to reset PIN.' };
+    }
+  };
+
   const setupBiometrics = async (): Promise<{ success: boolean; error?: string }> => {
     if (!user) {
       return { success: false, error: 'User is not authenticated.' };
@@ -197,6 +245,8 @@ export const SecurityProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         unlockWithBiometrics,
         setupPin,
         removePin,
+        resetPinWithPassword,
+        resetPinDirect,
         setupBiometrics,
         disableBiometrics,
         hasSecurityConfigured,
