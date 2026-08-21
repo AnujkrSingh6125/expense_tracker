@@ -57,7 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-bold text-lg text-surface-900 dark:text-surface-50 tracking-tight">
-                Expense<span className="text-brand-600 dark:text-brand-400">Tracker</span>
+                Master<span className="text-brand-600 dark:text-brand-400">Tracker</span>
               </span>
               {isDemoMode && (
                 <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">

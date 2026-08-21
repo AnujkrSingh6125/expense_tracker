@@ -66,7 +66,7 @@ export async function registerBiometricPasskey(
   const publicKeyCredentialCreationOptions: PublicKeyCredentialCreationOptions = {
     challenge,
     rp: {
-      name: 'ExpenseTracker App',
+      name: 'Master Tracker App',
       id: window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname,
     },
     user: {

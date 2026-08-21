@@ -81,7 +81,7 @@ export const AuthScreen: React.FC = () => {
             <Wallet className="w-6 h-6 text-white" />
           </div>
           <div>
-            <span className="text-xl font-black tracking-tight">ExpenseTracker</span>
+            <span className="text-xl font-black tracking-tight">Master Tracker</span>
             <span className="ml-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-white/20 border border-white/30">
               Pro
             </span>
@@ -163,7 +163,7 @@ export const AuthScreen: React.FC = () => {
               <Wallet className="w-5 h-5" />
             </div>
             <span className="font-bold text-lg text-surface-900 dark:text-surface-100 tracking-tight">
-              Expense<span className="text-brand-600 dark:text-brand-400">Tracker</span>
+              Master<span className="text-brand-600 dark:text-brand-400">Tracker</span>
             </span>
           </div>
 
@@ -382,7 +382,7 @@ export const AuthScreen: React.FC = () => {
 
         {/* Footer info */}
         <div className="pt-4 text-center text-xs text-surface-400">
-          ExpenseTracker • Personal Finance & Security Suite
+          Master Tracker • Personal Finance & Security Suite
         </div>
       </div>
 

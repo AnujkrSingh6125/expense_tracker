@@ -91,7 +91,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         signupSuccessUnverified
           ? 'Verify Your Email'
           : mode === 'signin'
-          ? 'Sign in to ExpenseTracker'
+          ? 'Sign in to Master Tracker'
           : 'Create Your Account'
       }
       subtitle={

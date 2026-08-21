@@ -261,7 +261,7 @@ export const LockScreenModal: React.FC = () => {
             </div>
 
             <h2 className="text-xl font-bold text-surface-900 dark:text-surface-100">
-              ExpenseTracker Locked
+              Master Tracker Locked
             </h2>
             <p className="text-xs text-surface-500 dark:text-surface-400 mt-1 mb-6">
               {profile?.full_name ? `Welcome back, ${profile.full_name}` : 'Enter your 4-digit PIN to continue'}

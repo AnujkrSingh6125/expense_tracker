@@ -67,8 +67,8 @@ export const GroupMembersModal: React.FC<GroupMembersModalProps> = ({ isOpen, on
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `Join ${activeGroup.name} on ExpenseTracker`,
-          text: `Join our group "${activeGroup.name}" on ExpenseTracker using invite code: ${activeGroup.join_code}`,
+          title: `Join ${activeGroup.name} on Master Tracker`,
+          text: `Join our group "${activeGroup.name}" on Master Tracker using invite code: ${activeGroup.join_code}`,
           url: window.location.href,
         });
       } catch {
