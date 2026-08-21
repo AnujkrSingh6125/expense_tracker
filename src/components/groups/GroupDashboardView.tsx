@@ -41,6 +41,7 @@ export const GroupDashboardView: React.FC<GroupDashboardViewProps> = ({
     metrics,
     memberSummaries,
     settlements,
+    isAdmin,
     deleteGroupExpense,
   } = useGroups();
   const { user } = useAuth();
@@ -87,10 +88,15 @@ export const GroupDashboardView: React.FC<GroupDashboardViewProps> = ({
           </button>
 
           <div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <h1 className="text-2xl font-extrabold text-surface-900 dark:text-surface-100 tracking-tight">
                 {activeGroup.name}
               </h1>
+              {isAdmin && (
+                <Badge variant="info" className="text-[10px] py-0.5 px-2">
+                  Admin
+                </Badge>
+              )}
               <button
                 type="button"
                 onClick={handleCopyCode}

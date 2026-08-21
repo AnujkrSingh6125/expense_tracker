@@ -44,6 +44,7 @@ interface GroupContextType {
   metrics: GroupMetricSummary;
   memberSummaries: GroupMemberSummary[];
   settlements: GroupSettlement[];
+  isAdmin: boolean;
   isOnline: boolean;
   isSyncing: boolean;
   pendingSyncCount: number;
@@ -51,6 +52,9 @@ interface GroupContextType {
   setActiveGroupId: (groupId: string | null) => void;
   createGroup: (name: string, description?: string, currency?: string) => Promise<{ group: Group | null; error: Error | null }>;
   joinGroup: (joinCode: string) => Promise<{ group: Group | null; error: Error | null }>;
+  leaveGroup: (groupId: string) => Promise<{ error: Error | null }>;
+  removeMember: (groupId: string, userId: string) => Promise<{ error: Error | null }>;
+  updateMemberRole: (groupId: string, userId: string, newRole: 'admin' | 'member') => Promise<{ error: Error | null }>;
   deleteGroup: (groupId: string) => Promise<{ error: Error | null }>;
   addGroupExpense: (
     expenseData: {
@@ -294,6 +298,14 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const settlements: GroupSettlement[] = useMemo(() => {
     return calculatePairwiseSettlements(groupExpenses, groupSplits, groupMembers);
   }, [groupExpenses, groupSplits, groupMembers]);
+
+  // Computed: whether the current user is admin or creator of active group
+  const isAdmin = useMemo(() => {
+    if (!activeGroup || !currentUserId) return false;
+    if (activeGroup.created_by === currentUserId) return true;
+    const currentMember = groupMembers.find((m) => m.user_id === currentUserId);
+    return currentMember?.role === 'admin';
+  }, [activeGroup, currentUserId, groupMembers]);
 
   // Update pending queue count
   const refreshPendingCount = useCallback(async () => {
@@ -873,26 +885,163 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // CRUD: Delete / Leave Group
-  const deleteGroup = async (groupId: string): Promise<{ error: Error | null }> => {
+  // CRUD: Leave Group (Member voluntarily leaves)
+  const leaveGroup = async (groupId: string): Promise<{ error: Error | null }> => {
+    const targetGroup = groups.find((g) => g.id === groupId);
+    const groupName = targetGroup ? targetGroup.name : 'Group';
+
     const updated = groups.filter((g) => g.id !== groupId);
     setGroups(updated);
     if (activeGroupId === groupId) {
-      setActiveGroupId(updated.length > 0 ? updated[0].id : null);
+      setActiveGroupId(null);
     }
     await deleteLocalGroup(groupId);
 
     if (isDemoMode || !isSupabaseConfigured) {
-      addToast({ type: 'info', title: 'Group Removed', message: 'Group was removed.' });
+      addToast({ type: 'info', title: 'Left Group', message: `You have left "${groupName}".` });
       return { error: null };
     }
 
     try {
-      const { error } = await supabase.from('groups').delete().eq('id', groupId);
-      if (error) throw error;
-      addToast({ type: 'info', title: 'Group Deleted', message: 'Group deleted successfully.' });
+      // 1. Attempt leave_group RPC
+      const { error } = await supabase.rpc('leave_group', { p_group_id: groupId });
+      if (error) {
+        // Fallback direct delete from group_members
+        const { error: fallbackErr } = await supabase
+          .from('group_members')
+          .delete()
+          .eq('group_id', groupId)
+          .eq('user_id', currentUserId);
+        if (fallbackErr) throw fallbackErr;
+      }
+
+      await refreshGroupData();
+      addToast({ type: 'info', title: 'Left Group', message: `You left "${groupName}".` });
       return { error: null };
     } catch (err: unknown) {
+      console.error('Error leaving group:', err);
+      return { error: err as Error };
+    }
+  };
+
+  // CRUD: Remove Member (Admin kicks out a member)
+  const removeMember = async (groupId: string, userId: string): Promise<{ error: Error | null }> => {
+    // Optimistic UI update
+    setGroupMembers((prev) => prev.filter((m) => m.user_id !== userId));
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({ type: 'success', title: 'Member Removed', message: 'Member was removed from the group.' });
+      return { error: null };
+    }
+
+    try {
+      // 1. Attempt remove_group_member RPC
+      const { error } = await supabase.rpc('remove_group_member', {
+        p_group_id: groupId,
+        p_target_user_id: userId,
+      });
+
+      if (error) {
+        // Fallback direct delete
+        const { error: fallbackErr } = await supabase
+          .from('group_members')
+          .delete()
+          .eq('group_id', groupId)
+          .eq('user_id', userId);
+        if (fallbackErr) throw fallbackErr;
+      }
+
+      await refreshGroupData();
+      addToast({ type: 'success', title: 'Member Removed', message: 'Member was successfully removed from the group.' });
+      return { error: null };
+    } catch (err: unknown) {
+      const msg = (err as Error).message || 'Failed to remove member.';
+      addToast({ type: 'error', title: 'Action Failed', message: msg });
+      return { error: err as Error };
+    }
+  };
+
+  // CRUD: Update Member Role (Make Admin / Demote)
+  const updateMemberRole = async (
+    groupId: string,
+    userId: string,
+    newRole: 'admin' | 'member'
+  ): Promise<{ error: Error | null }> => {
+    // Optimistic UI update
+    setGroupMembers((prev) =>
+      prev.map((m) => (m.user_id === userId ? { ...m, role: newRole } : m))
+    );
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({
+        type: 'success',
+        title: 'Role Updated',
+        message: newRole === 'admin' ? 'Member promoted to Admin.' : 'Member role updated to Member.',
+      });
+      return { error: null };
+    }
+
+    try {
+      // 1. Attempt update_group_member_role RPC
+      const { error } = await supabase.rpc('update_group_member_role', {
+        p_group_id: groupId,
+        p_target_user_id: userId,
+        p_new_role: newRole,
+      });
+
+      if (error) {
+        // Fallback direct update
+        const { error: fallbackErr } = await supabase
+          .from('group_members')
+          .update({ role: newRole })
+          .eq('group_id', groupId)
+          .eq('user_id', userId);
+        if (fallbackErr) throw fallbackErr;
+      }
+
+      await refreshGroupData();
+      addToast({
+        type: 'success',
+        title: 'Role Updated',
+        message: newRole === 'admin' ? 'Member promoted to Admin.' : 'Member role updated to Member.',
+      });
+      return { error: null };
+    } catch (err: unknown) {
+      const msg = (err as Error).message || 'Failed to update member role.';
+      addToast({ type: 'error', title: 'Action Failed', message: msg });
+      return { error: err as Error };
+    }
+  };
+
+  // CRUD: Delete Group (Admin permanently deletes group)
+  const deleteGroup = async (groupId: string): Promise<{ error: Error | null }> => {
+    const updated = groups.filter((g) => g.id !== groupId);
+    setGroups(updated);
+    if (activeGroupId === groupId) {
+      setActiveGroupId(null);
+    }
+    await deleteLocalGroup(groupId);
+
+    if (isDemoMode || !isSupabaseConfigured) {
+      addToast({ type: 'info', title: 'Group Deleted', message: 'Group was permanently deleted.' });
+      return { error: null };
+    }
+
+    try {
+      // 1. Attempt delete_group_by_admin RPC
+      const { error } = await supabase.rpc('delete_group_by_admin', { p_group_id: groupId });
+      if (error) {
+        // Fallback direct delete
+        const { error: fallbackErr } = await supabase.from('groups').delete().eq('id', groupId);
+        if (fallbackErr) throw fallbackErr;
+      }
+
+      await refreshGroupData();
+      addToast({ type: 'info', title: 'Group Deleted', message: 'Group and all its expenses deleted successfully.' });
+      return { error: null };
+    } catch (err: unknown) {
+      const msg = (err as Error).message || 'Failed to delete group.';
+      addToast({ type: 'error', title: 'Delete Failed', message: msg });
       return { error: err as Error };
     }
   };
@@ -1172,6 +1321,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         metrics,
         memberSummaries,
         settlements,
+        isAdmin,
         isOnline,
         isSyncing,
         pendingSyncCount,
@@ -1179,6 +1329,9 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setActiveGroupId,
         createGroup,
         joinGroup,
+        leaveGroup,
+        removeMember,
+        updateMemberRole,
         deleteGroup,
         addGroupExpense,
         updateGroupExpense,

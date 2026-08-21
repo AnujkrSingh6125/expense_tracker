@@ -100,7 +100,15 @@ CREATE POLICY "Admins can update their groups"
 DROP POLICY IF EXISTS "Admins can delete their groups" ON public.groups;
 CREATE POLICY "Admins can delete their groups"
   ON public.groups FOR DELETE
-  USING (auth.uid() = created_by);
+  USING (
+    auth.uid() = created_by OR
+    EXISTS (
+      SELECT 1 FROM public.group_members
+      WHERE group_members.group_id = groups.id
+      AND group_members.user_id = auth.uid()
+      AND group_members.role = 'admin'
+    )
+  );
 
 -- 6. RLS Policies for GROUP_MEMBERS
 DROP POLICY IF EXISTS "Members can view group membership" ON public.group_members;
@@ -121,6 +129,12 @@ CREATE POLICY "Users can insert themselves or admins can add members"
   WITH CHECK (
     auth.uid() = user_id OR
     EXISTS (
+      SELECT 1 FROM public.group_members AS gm
+      WHERE gm.group_id = group_members.group_id
+      AND gm.user_id = auth.uid()
+      AND gm.role = 'admin'
+    ) OR
+    EXISTS (
       SELECT 1 FROM public.groups
       WHERE groups.id = group_members.group_id
       AND groups.created_by = auth.uid()
@@ -131,6 +145,12 @@ DROP POLICY IF EXISTS "Admins can update member roles" ON public.group_members;
 CREATE POLICY "Admins can update member roles"
   ON public.group_members FOR UPDATE
   USING (
+    EXISTS (
+      SELECT 1 FROM public.group_members AS gm
+      WHERE gm.group_id = group_members.group_id
+      AND gm.user_id = auth.uid()
+      AND gm.role = 'admin'
+    ) OR
     EXISTS (
       SELECT 1 FROM public.groups
       WHERE groups.id = group_members.group_id
@@ -143,6 +163,12 @@ CREATE POLICY "Members can leave or admins can remove members"
   ON public.group_members FOR DELETE
   USING (
     auth.uid() = user_id OR
+    EXISTS (
+      SELECT 1 FROM public.group_members AS gm
+      WHERE gm.group_id = group_members.group_id
+      AND gm.user_id = auth.uid()
+      AND gm.role = 'admin'
+    ) OR
     EXISTS (
       SELECT 1 FROM public.groups
       WHERE groups.id = group_members.group_id
@@ -356,10 +382,167 @@ BEGIN
 END;
 $$;
 
+-- Function: leave_group
+CREATE OR REPLACE FUNCTION public.leave_group(p_group_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_member_count INT;
+BEGIN
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated.';
+  END IF;
+
+  -- Delete member entry
+  DELETE FROM public.group_members
+  WHERE group_id = p_group_id AND user_id = v_user_id;
+
+  -- Check remaining members; if zero, delete group
+  SELECT COUNT(*) INTO v_member_count
+  FROM public.group_members
+  WHERE group_id = p_group_id;
+
+  IF v_member_count = 0 THEN
+    DELETE FROM public.groups WHERE id = p_group_id;
+  END IF;
+
+  RETURN jsonb_build_object('success', true, 'remaining_members', v_member_count);
+END;
+$$;
+
+-- Function: remove_group_member (Kick out member)
+CREATE OR REPLACE FUNCTION public.remove_group_member(
+  p_group_id UUID,
+  p_target_user_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_is_admin BOOLEAN;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated.';
+  END IF;
+
+  -- Verify caller is admin or group creator
+  SELECT EXISTS (
+    SELECT 1 FROM public.group_members
+    WHERE group_id = p_group_id AND user_id = v_caller_id AND role = 'admin'
+  ) OR EXISTS (
+    SELECT 1 FROM public.groups
+    WHERE id = p_group_id AND created_by = v_caller_id
+  ) INTO v_is_admin;
+
+  IF NOT v_is_admin THEN
+    RAISE EXCEPTION 'Permission denied. Only group admins can remove members.';
+  END IF;
+
+  DELETE FROM public.group_members
+  WHERE group_id = p_group_id AND user_id = p_target_user_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- Function: update_group_member_role (Make Admin / Demote)
+CREATE OR REPLACE FUNCTION public.update_group_member_role(
+  p_group_id UUID,
+  p_target_user_id UUID,
+  p_new_role TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_is_admin BOOLEAN;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated.';
+  END IF;
+
+  IF p_new_role NOT IN ('admin', 'member') THEN
+    RAISE EXCEPTION 'Invalid role. Role must be admin or member.';
+  END IF;
+
+  -- Verify caller is admin or group creator
+  SELECT EXISTS (
+    SELECT 1 FROM public.group_members
+    WHERE group_id = p_group_id AND user_id = v_caller_id AND role = 'admin'
+  ) OR EXISTS (
+    SELECT 1 FROM public.groups
+    WHERE id = p_group_id AND created_by = v_caller_id
+  ) INTO v_is_admin;
+
+  IF NOT v_is_admin THEN
+    RAISE EXCEPTION 'Permission denied. Only group admins can manage member roles.';
+  END IF;
+
+  UPDATE public.group_members
+  SET role = p_new_role
+  WHERE group_id = p_group_id AND user_id = p_target_user_id;
+
+  RETURN jsonb_build_object('success', true, 'new_role', p_new_role);
+END;
+$$;
+
+-- Function: delete_group_by_admin (Admin Delete Group)
+CREATE OR REPLACE FUNCTION public.delete_group_by_admin(p_group_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_is_admin BOOLEAN;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated.';
+  END IF;
+
+  -- Verify caller is admin or group creator
+  SELECT EXISTS (
+    SELECT 1 FROM public.group_members
+    WHERE group_id = p_group_id AND user_id = v_caller_id AND role = 'admin'
+  ) OR EXISTS (
+    SELECT 1 FROM public.groups
+    WHERE id = p_group_id AND created_by = v_caller_id
+  ) INTO v_is_admin;
+
+  IF NOT v_is_admin THEN
+    RAISE EXCEPTION 'Permission denied. Only group admins can delete this group.';
+  END IF;
+
+  DELETE FROM public.groups WHERE id = p_group_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+
 -- Grant execution permissions
 GRANT EXECUTE ON FUNCTION public.create_group_with_admin(TEXT, TEXT, TEXT, TEXT) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.join_group_by_code(TEXT) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.leave_group(UUID) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.remove_group_member(UUID, UUID) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.update_group_member_role(UUID, UUID, TEXT) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.delete_group_by_admin(UUID) TO authenticated, anon, service_role;
 
 -- Force PostgREST schema cache reload immediately
 NOTIFY pgrst, 'reload schema';
+
 
