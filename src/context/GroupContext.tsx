@@ -1142,11 +1142,18 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const targetGroup = groups.find((g) => g.id === groupId);
     const groupName = targetGroup ? targetGroup.name : 'Group';
 
+    // 1. Immediately reset active state to prevent null-pointer accesses
+    if (activeGroupId === groupId || activeGroupIdRef.current === groupId) {
+      setActiveGroupId(null);
+      activeGroupIdRef.current = null;
+      setGroupMembers([]);
+      setGroupExpenses([]);
+      setGroupSplits([]);
+    }
+
+    // 2. Optimistic removal from groups state & local storage
     const updated = groups.filter((g) => g.id !== groupId);
     setGroups(updated);
-    if (activeGroupId === groupId) {
-      setActiveGroupId(null);
-    }
     await deleteLocalGroup(groupId);
 
     if (isDemoMode || !isSupabaseConfigured) {
@@ -1155,7 +1162,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     try {
-      // 1. Attempt leave_group RPC
+      // 3. Attempt leave_group RPC
       const { error } = await supabase.rpc('leave_group', { p_group_id: groupId });
       if (error) {
         // Fallback direct delete from group_members
@@ -1167,7 +1174,6 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (fallbackErr) throw fallbackErr;
       }
 
-      await refreshGroupData();
       addToast({ type: 'info', title: 'Left Group', message: `You left "${groupName}".` });
       return { error: null };
     } catch (err: unknown) {
@@ -1203,7 +1209,6 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (fallbackErr) throw fallbackErr;
       }
 
-      await refreshGroupData();
       addToast({ type: 'success', title: 'Member Removed', message: 'Member was successfully removed from the group.' });
       return { error: null };
     } catch (err: unknown) {
@@ -1251,7 +1256,6 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (fallbackErr) throw fallbackErr;
       }
 
-      await refreshGroupData();
       addToast({
         type: 'success',
         title: 'Role Updated',
@@ -1267,11 +1271,18 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // CRUD: Delete Group (Admin permanently deletes group)
   const deleteGroup = async (groupId: string): Promise<{ error: Error | null }> => {
+    // 1. Immediately reset active state to prevent null-pointer accesses
+    if (activeGroupId === groupId || activeGroupIdRef.current === groupId) {
+      setActiveGroupId(null);
+      activeGroupIdRef.current = null;
+      setGroupMembers([]);
+      setGroupExpenses([]);
+      setGroupSplits([]);
+    }
+
+    // 2. Optimistic removal from groups state & local storage
     const updated = groups.filter((g) => g.id !== groupId);
     setGroups(updated);
-    if (activeGroupId === groupId) {
-      setActiveGroupId(null);
-    }
     await deleteLocalGroup(groupId);
 
     if (isDemoMode || !isSupabaseConfigured) {
@@ -1280,15 +1291,16 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     try {
-      // 1. Attempt delete_group_by_admin RPC
+      // 3. Attempt delete_group_by_admin RPC
       const { error } = await supabase.rpc('delete_group_by_admin', { p_group_id: groupId });
       if (error) {
-        // Fallback direct delete
+        // Fallback direct cascade delete
+        await supabase.from('group_expenses').delete().eq('group_id', groupId);
+        await supabase.from('group_members').delete().eq('group_id', groupId);
         const { error: fallbackErr } = await supabase.from('groups').delete().eq('id', groupId);
         if (fallbackErr) throw fallbackErr;
       }
 
-      await refreshGroupData();
       addToast({ type: 'info', title: 'Group Deleted', message: 'Group and all its expenses deleted successfully.' });
       return { error: null };
     } catch (err: unknown) {

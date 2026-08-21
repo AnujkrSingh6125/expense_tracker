@@ -688,6 +688,12 @@ BEGIN
     RAISE EXCEPTION 'Permission denied. Only group admins can delete this group.';
   END IF;
 
+  -- Explicit cascade cleanup
+  DELETE FROM public.group_expense_splits WHERE group_expense_id IN (
+    SELECT id FROM public.group_expenses WHERE group_id = p_group_id
+  );
+  DELETE FROM public.group_expenses WHERE group_id = p_group_id;
+  DELETE FROM public.group_members WHERE group_id = p_group_id;
   DELETE FROM public.groups WHERE id = p_group_id;
 
   RETURN jsonb_build_object('success', true);

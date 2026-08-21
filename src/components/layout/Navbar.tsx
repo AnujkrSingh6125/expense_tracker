@@ -115,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Network & Sync Indicator */}
           <div className="hidden sm:flex items-center">
-            {isSyncing ? (
+            {isSyncing && pendingSyncCount > 0 ? (
               <span
                 title="Synchronizing offline queue with Supabase"
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400 text-xs font-semibold"
