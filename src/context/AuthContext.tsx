@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { Profile } from '../types';
+import { clearAllLocalData } from '../lib/db';
 
 interface AuthContextType {
   user: User | null;
@@ -384,27 +385,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (user) {
+        const userId = user.id;
+
         // 1. Call server-side PostgreSQL function to delete from auth.users (cascades to all tables)
         const { error: rpcError } = await supabase.rpc('delete_user', {
-          target_user_id: user.id,
+          target_user_id: userId,
         });
 
         if (rpcError) {
-          console.warn('delete_user RPC notice:', rpcError);
-          // Fallback: Delete user transactions, budgets, and profile manually
-          await supabase.from('expenses').delete().eq('user_id', user.id);
-          await supabase.from('budgets').delete().eq('user_id', user.id);
-          await supabase.from('profiles').delete().eq('id', user.id);
+          console.warn('delete_user RPC notice, performing fallback deletions:', rpcError);
+          // Fallback: Delete all user records manually
+          try {
+            await supabase.from('group_expense_splits').delete().eq('user_id', userId);
+            await supabase.from('group_expenses').delete().eq('paid_by', userId);
+            await supabase.from('group_members').delete().eq('user_id', userId);
+            await supabase.from('expenses').delete().eq('user_id', userId);
+            await supabase.from('budgets').delete().eq('user_id', userId);
+            await supabase.from('profiles').delete().eq('id', userId);
+          } catch (delErr) {
+            console.error('Fallback delete error:', delErr);
+          }
         }
 
-        // 2. Clear local preferences and credentials
-        localStorage.removeItem('et_sec_pin_hash');
-        localStorage.removeItem('et_sec_bio_enabled');
-        localStorage.removeItem('et_sec_bio_cred_id');
-        localStorage.removeItem('et_user_currency');
-        localStorage.removeItem('et_demo_active');
+        // 2. Clear all local IndexedDB offline storage
+        try {
+          await clearAllLocalData();
+        } catch (idbErr) {
+          console.warn('IDB clear warning:', idbErr);
+        }
 
-        // 3. Sign out of Supabase
+        // 3. Clear local storage and session storage
+        localStorage.clear();
+        sessionStorage.clear();
+
+        // 4. Sign out of Supabase
         await supabase.auth.signOut();
         setUser(null);
         setSession(null);

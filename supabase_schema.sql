@@ -138,6 +138,7 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- 8. Permanent User Deletion Function (Deletes from auth.users with CASCADE)
+DROP FUNCTION IF EXISTS public.delete_user(UUID);
 CREATE OR REPLACE FUNCTION public.delete_user(target_user_id UUID DEFAULT NULL)
 RETURNS void
 LANGUAGE plpgsql

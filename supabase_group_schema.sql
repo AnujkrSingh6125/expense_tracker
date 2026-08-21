@@ -640,6 +640,57 @@ BEGIN
 END;
 $$;
 
+-- Function: delete_user (Permanent account deletion from auth.users with full cascade)
+DROP FUNCTION IF EXISTS public.delete_user(UUID);
+CREATE OR REPLACE FUNCTION public.delete_user(target_user_id UUID DEFAULT NULL)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  curr_user_id UUID;
+  v_group RECORD;
+BEGIN
+  -- Determine user ID from auth context or argument
+  curr_user_id := COALESCE(auth.uid(), target_user_id);
+
+  IF curr_user_id IS NULL THEN
+    RAISE EXCEPTION 'User ID not found or not authenticated';
+  END IF;
+
+  -- 1. Clean up group expense splits & group expenses
+  DELETE FROM public.group_expense_splits WHERE user_id = curr_user_id;
+  DELETE FROM public.group_expenses WHERE paid_by = curr_user_id;
+
+  -- 2. Remove user from group memberships
+  DELETE FROM public.group_members WHERE user_id = curr_user_id;
+
+  -- 3. For any group where this user was creator, delete group if no members remain
+  FOR v_group IN SELECT id FROM public.groups WHERE created_by = curr_user_id LOOP
+    IF NOT EXISTS (SELECT 1 FROM public.group_members WHERE group_id = v_group.id) THEN
+      DELETE FROM public.groups WHERE id = v_group.id;
+    END IF;
+  END LOOP;
+
+  -- 4. Clean up personal expenses & budgets
+  DELETE FROM public.expenses WHERE user_id = curr_user_id;
+  DELETE FROM public.budgets WHERE user_id = curr_user_id;
+
+  -- 5. Delete profile
+  DELETE FROM public.profiles WHERE id = curr_user_id;
+
+  -- 6. Clean auth identities and sessions
+  DELETE FROM auth.identities WHERE user_id = curr_user_id;
+  DELETE FROM auth.sessions WHERE user_id = curr_user_id;
+
+  -- 7. Delete user completely from auth.users
+  DELETE FROM auth.users WHERE id = curr_user_id;
+
+  RETURN jsonb_build_object('success', true, 'deleted_user_id', curr_user_id);
+END;
+$$;
+
 -- 13. Grant Permissions to authenticated and service_role
 GRANT ALL ON public.profiles TO authenticated, service_role;
 GRANT ALL ON public.groups TO authenticated, service_role;
@@ -653,6 +704,7 @@ GRANT EXECUTE ON FUNCTION public.leave_group(UUID) TO authenticated, anon, servi
 GRANT EXECUTE ON FUNCTION public.remove_group_member(UUID, UUID) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.update_group_member_role(UUID, UUID, TEXT) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_group_by_admin(UUID) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.delete_user(UUID) TO authenticated, anon, service_role;
 
 -- 14. Enable Supabase Realtime for Group Collaboration
 DO $$
