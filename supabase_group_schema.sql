@@ -354,7 +354,7 @@ DECLARE
   v_user_id UUID;
   v_group RECORD;
   v_clean_code TEXT;
-  v_raw_code TEXT;
+  v_normalized_suffix TEXT;
   v_prefixed_code TEXT;
   v_already_member BOOLEAN := FALSE;
   v_result JSONB;
@@ -368,16 +368,17 @@ BEGIN
     RAISE EXCEPTION 'Please provide a valid invite join code.';
   END IF;
 
+  -- Normalize input: trim, uppercase, and strip prefixes
   v_clean_code := UPPER(trim(p_code));
-  v_raw_code := regexp_replace(v_clean_code, '^EXP[-_ ]?', '', 'i');
-  v_prefixed_code := 'EXP-' || v_raw_code;
+  v_normalized_suffix := UPPER(regexp_replace(v_clean_code, '^EXP[-\s_]?', '', 'i'));
+  v_prefixed_code := 'EXP-' || v_normalized_suffix;
 
-  -- Find group by join_code with prefix, case, and format tolerance
+  -- Find group by join_code using multiple tolerant matching strategies
   SELECT * INTO v_group
   FROM public.groups
-  WHERE UPPER(trim(join_code)) = v_clean_code
+  WHERE UPPER(trim(regexp_replace(join_code, '^EXP[-\s_]?', '', 'i'))) = v_normalized_suffix
+     OR UPPER(trim(join_code)) = v_clean_code
      OR UPPER(trim(join_code)) = v_prefixed_code
-     OR UPPER(trim(regexp_replace(join_code, '^EXP[-_ ]?', '', 'i'))) = v_raw_code
      OR UPPER(trim(replace(join_code, '-', ''))) = UPPER(trim(replace(v_clean_code, '-', '')))
   LIMIT 1;
 
@@ -385,7 +386,7 @@ BEGIN
     RAISE EXCEPTION 'Invalid invite code (%). No matching group found.', v_clean_code;
   END IF;
 
-  -- Check if already a member
+  -- Check if caller is already a member
   SELECT EXISTS (
     SELECT 1 FROM public.group_members
     WHERE group_id = v_group.id AND user_id = v_user_id
@@ -398,6 +399,7 @@ BEGIN
     ON CONFLICT (group_id, user_id) DO NOTHING;
   END IF;
 
+  -- Build full group JSON response with members list
   SELECT jsonb_build_object(
     'id', v_group.id,
     'name', v_group.name,
@@ -406,7 +408,30 @@ BEGIN
     'join_code', v_group.join_code,
     'created_by', v_group.created_by,
     'created_at', v_group.created_at,
-    'already_member', v_already_member
+    'already_member', v_already_member,
+    'members', COALESCE(
+      (
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'id', gm.id,
+            'group_id', gm.group_id,
+            'user_id', gm.user_id,
+            'role', gm.role,
+            'joined_at', gm.joined_at,
+            'profile', jsonb_build_object(
+              'id', p.id,
+              'email', p.email,
+              'full_name', p.full_name,
+              'currency', p.currency
+            )
+          )
+        )
+        FROM public.group_members gm
+        LEFT JOIN public.profiles p ON p.id = gm.user_id
+        WHERE gm.group_id = v_group.id
+      ),
+      '[]'::jsonb
+    )
   ) INTO v_result;
 
   RETURN v_result;
