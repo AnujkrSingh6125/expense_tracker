@@ -1015,21 +1015,31 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     try {
       // 1. Primary RPC Call using SECURITY DEFINER stored procedure
-      const { data, error } = await supabase.rpc('join_group_by_code', {
-        p_code: rawInput,
-      });
+      let rpcData: any = null;
+      let rpcError: any = null;
 
-      if (!error && data) {
+      try {
+        const { data, error } = await supabase.rpc('join_group_by_code', {
+          p_code: rawInput,
+        });
+        rpcData = data;
+        rpcError = error;
+      } catch (rpcCallErr) {
+        console.warn('join_group_by_code RPC network or execution notice:', rpcCallErr);
+        rpcError = rpcCallErr;
+      }
+
+      if (!rpcError && rpcData) {
         const joinedGroup: Group = {
-          id: data.id,
-          name: data.name,
-          description: data.description || null,
-          currency: data.currency || '₹',
-          join_code: data.join_code,
-          created_by: data.created_by,
-          created_at: data.created_at,
+          id: rpcData.id,
+          name: rpcData.name,
+          description: rpcData.description || null,
+          currency: rpcData.currency || '₹',
+          join_code: rpcData.join_code,
+          created_by: rpcData.created_by,
+          created_at: rpcData.created_at,
           sync_status: 'synced',
-          member_count: data.members ? data.members.length : 1,
+          member_count: rpcData.members ? rpcData.members.length : 1,
         };
 
         // Cache in state and IndexedDB immediately
@@ -1037,28 +1047,25 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         await saveLocalGroup(joinedGroup);
         setActiveGroupId(joinedGroup.id);
 
-        if (data.members && Array.isArray(data.members)) {
-          setGroupMembers(data.members);
-          await saveLocalGroupMembers(data.members);
+        if (rpcData.members && Array.isArray(rpcData.members)) {
+          setGroupMembers(rpcData.members);
+          await saveLocalGroupMembers(rpcData.members);
         }
 
         await refreshGroupData();
 
         addToast({
           type: 'success',
-          title: data.already_member ? 'Switched to Group' : 'Joined Group!',
-          message: data.already_member
-            ? `You are already a member of "${data.name}".`
-            : `You have successfully joined "${data.name}".`,
+          title: rpcData.already_member ? 'Switched to Group' : 'Joined Group!',
+          message: rpcData.already_member
+            ? `You are already a member of "${rpcData.name}".`
+            : `You have successfully joined "${rpcData.name}".`,
         });
         return { group: joinedGroup, error: null };
       }
 
-      // 2. Direct fallback query if RPC call returned an error
-      if (error) {
-        console.warn('RPC join_group_by_code notice, trying client fallback query:', error);
-
-        // Fallback: Query groups directly by matching join_code or invite_code
+      // 2. Direct client query fallback (works if RPC was missing or experienced transient error)
+      try {
         const { data: groupData, error: groupFetchErr } = await supabase
           .from('groups')
           .select('*')
@@ -1109,29 +1116,54 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           return { group: joinedGroup, error: null };
         }
-
-        if (error.message && error.message.includes('No matching group found')) {
-          const msg = `Invalid invite code (${rawInput}). No matching group found.`;
-          addToast({ type: 'error', title: 'Group Not Found', message: msg });
-          return { group: null, error: new Error(msg) };
-        }
-
-        if (error.message && (error.message.includes('schema cache') || error.code === 'PGRST202')) {
-          const msg = `Database function 'join_group_by_code' is not yet installed in Supabase. Please run the SQL schema migration in Supabase SQL Editor.`;
-          addToast({ type: 'error', title: 'Database Setup Required', message: msg });
-          return { group: null, error: new Error(msg) };
-        }
-
-        const msg = error.message || `Could not join group with code "${rawInput}".`;
-        addToast({ type: 'error', title: 'Join Failed', message: msg });
-        return { group: null, error: new Error(msg) };
+      } catch (fallbackQueryErr) {
+        console.warn('Client fallback query network notice:', fallbackQueryErr);
       }
 
-      return { group: null, error: new Error('Could not join group.') };
+      // 3. Local IndexedDB Cache Lookup (In case group is already stored on device)
+      const cachedGroups = await getAllLocalGroups();
+      const localMatch = cachedGroups.find((g) => {
+        const gCode = (g.join_code || '').trim().toUpperCase();
+        const gStripped = gCode.replace(/^EXP[-_ ]?/i, '');
+        return gCode === rawInput || gCode === standardPrefixCode || gStripped === strippedCode;
+      });
+
+      if (localMatch) {
+        setActiveGroupId(localMatch.id);
+        addToast({
+          type: 'success',
+          title: 'Switched to Group',
+          message: `Opened "${localMatch.name}" from local storage.`,
+        });
+        return { group: localMatch, error: null };
+      }
+
+      // 4. Construct friendly user error message
+      const isFetchErr =
+        (rpcError as Error)?.message?.includes('Failed to fetch') ||
+        rpcError instanceof TypeError;
+      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+      let msg = `Invalid invite code (${rawInput}). No matching group found.`;
+      if (isOffline) {
+        msg = 'You are currently offline. Please check your internet connection and try again.';
+      } else if (isFetchErr) {
+        msg = 'Unable to connect to database. Please check your internet connection or verify Vercel environment variables.';
+      } else if (rpcError?.message && rpcError.message.includes('No matching group found')) {
+        msg = `Invalid invite code (${rawInput}). No matching group found.`;
+      }
+
+      addToast({ type: 'error', title: 'Could Not Join', message: msg });
+      return { group: null, error: new Error(msg) };
     } catch (err: unknown) {
-      const msg = (err as Error).message || 'Invalid join code. Could not join group.';
+      const isFetchErr =
+        (err as Error)?.message?.includes('Failed to fetch') || err instanceof TypeError;
+      const msg = isFetchErr
+        ? 'Unable to connect to database. Please check your network connection.'
+        : (err as Error).message || 'Invalid join code. Could not join group.';
+
       addToast({ type: 'error', title: 'Join Failed', message: msg });
-      return { group: null, error: err as Error };
+      return { group: null, error: new Error(msg) };
     }
   };
 
