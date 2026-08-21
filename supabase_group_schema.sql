@@ -321,16 +321,20 @@ DECLARE
 BEGIN
   v_user_id := auth.uid();
   IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'Not authenticated';
+    RAISE EXCEPTION 'Not authenticated. Please sign in to join a group.';
   END IF;
 
-  -- Find group
+  IF p_code IS NULL OR length(trim(p_code)) = 0 THEN
+    RAISE EXCEPTION 'Please provide a valid invite join code.';
+  END IF;
+
+  -- Find group by join_code (case-insensitive and trimmed)
   SELECT * INTO v_group
   FROM public.groups
   WHERE UPPER(trim(join_code)) = UPPER(trim(p_code));
 
   IF v_group.id IS NULL THEN
-    RAISE EXCEPTION 'Invalid invite join code. No group found.';
+    RAISE EXCEPTION 'Invalid invite code (%). No matching group found.', trim(p_code);
   END IF;
 
   -- Insert member if not already joined
@@ -353,5 +357,9 @@ END;
 $$;
 
 -- Grant execution permissions
-GRANT EXECUTE ON FUNCTION public.create_group_with_admin(TEXT, TEXT, TEXT, TEXT) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.join_group_by_code(TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.create_group_with_admin(TEXT, TEXT, TEXT, TEXT) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.join_group_by_code(TEXT) TO authenticated, anon, service_role;
+
+-- Force PostgREST schema cache reload immediately
+NOTIFY pgrst, 'reload schema';
+

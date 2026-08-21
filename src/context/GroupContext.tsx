@@ -795,23 +795,77 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     try {
+      // 1. Attempt RPC call
       const { data, error } = await supabase.rpc('join_group_by_code', {
         p_code: cleanCode,
       });
 
-      if (error) throw error;
-
-      await refreshGroupData();
-      if (data && data.id) {
-        setActiveGroupId(data.id);
+      if (!error && data) {
+        await refreshGroupData();
+        if (data.id) {
+          setActiveGroupId(data.id);
+        }
+        addToast({
+          type: 'success',
+          title: 'Joined Group!',
+          message: `You are now a member of "${data.name}".`,
+        });
+        return { group: data as Group, error: null };
       }
 
-      addToast({
-        type: 'success',
-        title: 'Joined Group!',
-        message: `You are now a member of "${data.name}".`,
-      });
-      return { group: data as Group, error: null };
+      // 2. If RPC returned an error, inspect if it's missing RPC function or invalid code
+      if (error) {
+        console.warn('RPC join_group_by_code notice, trying client fallback query:', error);
+
+        // If explicit not-found error from RPC
+        if (error.message && error.message.includes('No matching group found')) {
+          addToast({ type: 'error', title: 'Invalid Invite Code', message: `No group found with code "${cleanCode}".` });
+          return { group: null, error: new Error(`No group found with code "${cleanCode}"`) };
+        }
+
+        // Schema cache or function missing fallback: query groups directly
+        const { data: groupData, error: groupFetchErr } = await supabase
+          .from('groups')
+          .select('*')
+          .ilike('join_code', cleanCode)
+          .maybeSingle();
+
+        if (groupFetchErr || !groupData) {
+          const msg = `Invalid invite code (${cleanCode}). No matching group found.`;
+          addToast({ type: 'error', title: 'Group Not Found', message: msg });
+          return { group: null, error: new Error(msg) };
+        }
+
+        // Check if user is already a member
+        const { data: existingMem } = await supabase
+          .from('group_members')
+          .select('id')
+          .eq('group_id', groupData.id)
+          .eq('user_id', currentUserId)
+          .maybeSingle();
+
+        if (!existingMem) {
+          const { error: insertErr } = await supabase.from('group_members').insert({
+            group_id: groupData.id,
+            user_id: currentUserId,
+            role: 'member',
+          });
+          if (insertErr) throw insertErr;
+        }
+
+        await refreshGroupData();
+        setActiveGroupId(groupData.id);
+        addToast({
+          type: 'success',
+          title: existingMem ? 'Switched to Group' : 'Joined Group!',
+          message: existingMem
+            ? `You are already a member of "${groupData.name}".`
+            : `You have joined "${groupData.name}".`,
+        });
+        return { group: groupData as Group, error: null };
+      }
+
+      return { group: null, error: new Error('Could not join group.') };
     } catch (err: unknown) {
       const msg = (err as Error).message || 'Invalid join code. Could not join group.';
       addToast({ type: 'error', title: 'Join Failed', message: msg });
