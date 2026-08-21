@@ -112,7 +112,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Right Action Icons */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2.5">
           {/* Network & Sync Indicator */}
           <div className="hidden sm:flex items-center">
             {isSyncing && pendingSyncCount > 0 ? (
@@ -143,13 +143,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {/* Quick Add Expense Button */}
+          {/* Quick Add Expense Button (Desktop) */}
           {appSpace === 'personal' ? (
             <Button
               size="sm"
               onClick={onOpenAddExpense}
               leftIcon={<Plus className="w-4 h-4" />}
-              className="hidden sm:inline-flex bg-brand-600 hover:bg-brand-700 font-bold"
+              className="hidden md:inline-flex bg-brand-600 hover:bg-brand-700 font-bold"
             >
               Add Expense
             </Button>
@@ -158,7 +158,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               size="sm"
               onClick={onOpenAddGroupExpense}
               leftIcon={<Plus className="w-4 h-4" />}
-              className="hidden sm:inline-flex bg-brand-600 hover:bg-brand-700 font-bold"
+              className="hidden md:inline-flex bg-brand-600 hover:bg-brand-700 font-bold"
             >
               Log Group Spend
             </Button>
@@ -166,6 +166,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Quick lock button */}
           <button
+            type="button"
             onClick={() => {
               if (hasSecurityConfigured) {
                 lockApp();
@@ -174,12 +175,12 @@ export const Navbar: React.FC<NavbarProps> = ({
               }
             }}
             title={hasSecurityConfigured ? 'Lock Application' : 'Configure Security Lock'}
-            className="p-2 rounded-xl text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors relative"
+            className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors relative"
           >
             {hasSecurityConfigured ? (
-              <Lock className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+              <Lock className="w-4.5 h-4.5 text-brand-600 dark:text-brand-400" />
             ) : (
-              <Shield className="w-5 h-5" />
+              <Shield className="w-4.5 h-4.5" />
             )}
           </button>
 
@@ -192,11 +193,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 await updateProfile({ currency: newCurr });
               }}
               title="Change Display Currency"
-              className="bg-surface-100 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 text-surface-800 dark:text-surface-200 text-xs font-bold py-1.5 px-2.5 rounded-xl cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/30 transition-colors"
+              className="bg-surface-100 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 text-surface-800 dark:text-surface-200 text-xs font-bold py-1.5 px-2 sm:px-2.5 rounded-xl cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/30 transition-colors"
             >
               {CURRENCIES.map((c) => (
                 <option key={c.code} value={c.code}>
-                  {c.code} ({c.name.split(' ')[0]})
+                  {c.code}
                 </option>
               ))}
             </select>
@@ -204,14 +205,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Theme Toggle Button */}
           <button
+            type="button"
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            className="p-2 rounded-xl text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+            className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
           >
             {theme === 'dark' ? (
-              <Sun className="w-5 h-5 text-amber-400" />
+              <Sun className="w-4.5 h-4.5 text-amber-400" />
             ) : (
-              <Moon className="w-5 h-5 text-surface-700" />
+              <Moon className="w-4.5 h-4.5 text-surface-700" />
             )}
           </button>
 

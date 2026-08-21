@@ -126,6 +126,7 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({ isOpen, onClose }) => 
               type="number"
               step="1"
               min="1"
+              inputMode="decimal"
               placeholder="e.g. 45000"
               value={amountLimit}
               onChange={(e) => setAmountLimit(e.target.value)}

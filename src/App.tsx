@@ -116,7 +116,7 @@ const MainLayout: React.FC = () => {
         />
 
         {/* Dynamic Main Content View */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 max-w-full">
+        <main className="flex-1 p-3 sm:p-6 lg:p-8 min-w-0 max-w-full pb-28 md:pb-8">
           {appSpace === 'groups' ? (
             /* COLLABORATIVE GROUP EXPENSE SPACES */
             activeGroup ? (
@@ -194,7 +194,8 @@ const MainLayout: React.FC = () => {
         setAppSpace={setAppSpace}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onOpenAddExpense={appSpace === 'groups' ? handleOpenAddGroupExpense : handleOpenAddExpense}
+        onOpenAddExpense={handleOpenAddExpense}
+        onOpenAddGroupExpense={handleOpenAddGroupExpense}
       />
 
       {/* Personal Modals */}

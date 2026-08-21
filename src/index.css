@@ -3,8 +3,11 @@
 @tailwind utilities;
 
 @layer base {
-  body {
+  html, body {
     @apply transition-colors duration-200;
+    -webkit-tap-highlight-color: transparent;
+    overflow-x: hidden;
+    overscroll-behavior-y: none;
   }
 }
 

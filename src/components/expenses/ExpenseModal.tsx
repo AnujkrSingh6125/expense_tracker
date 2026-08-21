@@ -151,6 +151,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
               type="number"
               step="0.01"
               min="0.01"
+              inputMode="decimal"
               placeholder="0.00"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}

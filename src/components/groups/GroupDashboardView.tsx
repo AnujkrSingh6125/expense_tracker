@@ -458,12 +458,12 @@ export const GroupDashboardView: React.FC<GroupDashboardViewProps> = ({
                     </div>
 
                     {/* Action buttons */}
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => onOpenEditExpense(expense)}
                         title="Edit expense"
-                        className="p-2 rounded-xl text-surface-400 hover:text-brand-600 hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+                        className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-surface-100 dark:bg-surface-800 text-surface-500 hover:text-brand-600 dark:hover:text-brand-400 active:scale-95 transition-all"
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
@@ -472,7 +472,7 @@ export const GroupDashboardView: React.FC<GroupDashboardViewProps> = ({
                         onClick={() => handleDelete(expense.id)}
                         disabled={deletingId === expense.id}
                         title="Delete expense"
-                        className="p-2 rounded-xl text-surface-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors"
+                        className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl bg-surface-100 dark:bg-surface-800 text-surface-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 active:scale-95 transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

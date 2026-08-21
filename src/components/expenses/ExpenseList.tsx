@@ -191,7 +191,7 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
             {/* Mobile Card List */}
             <div className="md:hidden divide-y divide-surface-100 dark:divide-surface-800">
               {filteredExpenses.map((exp) => (
-                <div key={exp.id} className="p-4 space-y-2">
+                <div key={exp.id} className="p-4 space-y-2.5 hover:bg-surface-50/50 dark:hover:bg-surface-800/40 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <Badge category={exp.category} />
                     <span className="font-extrabold text-base text-surface-900 dark:text-surface-100">
@@ -213,22 +213,28 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <button
+                        type="button"
                         onClick={() => onOpenEditExpense(exp)}
-                        className="p-1 text-surface-400 hover:text-brand-600"
+                        title="Edit expense"
+                        className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-xl bg-surface-100 dark:bg-surface-800 text-surface-500 hover:text-brand-600 dark:hover:text-brand-400 active:scale-95 transition-all"
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleDuplicate(exp)}
-                        className="p-1 text-surface-400 hover:text-surface-700"
+                        title="Duplicate expense"
+                        className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-xl bg-surface-100 dark:bg-surface-800 text-surface-500 hover:text-surface-800 dark:hover:text-surface-200 active:scale-95 transition-all"
                       >
                         <Copy className="w-4 h-4" />
                       </button>
                       <button
+                        type="button"
                         onClick={() => deleteExpense(exp.id)}
-                        className="p-1 text-surface-400 hover:text-rose-600"
+                        title="Delete expense"
+                        className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-xl bg-surface-100 dark:bg-surface-800 text-surface-500 hover:text-rose-600 active:scale-95 transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
