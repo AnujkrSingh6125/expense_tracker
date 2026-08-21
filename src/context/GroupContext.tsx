@@ -501,6 +501,35 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         const groupIds = (memberRows || []).map((r) => r.group_id);
 
+        // Auto-sync any locally created groups not yet on Supabase
+        const cached = await getAllLocalGroups();
+        const missingOnServer = cached.filter(
+          (cg) => cg.created_by === user.id && !groupIds.includes(cg.id)
+        );
+        for (const localG of missingOnServer) {
+          try {
+            const { error: gInsErr } = await supabase.from('groups').insert({
+              id: localG.id,
+              name: localG.name,
+              description: localG.description,
+              currency: localG.currency,
+              join_code: localG.join_code,
+              invite_code: localG.join_code,
+              created_by: user.id,
+            });
+            if (!gInsErr || gInsErr.code === '23505') {
+              await supabase.from('group_members').insert({
+                group_id: localG.id,
+                user_id: user.id,
+                role: 'admin',
+              });
+              groupIds.push(localG.id);
+            }
+          } catch (syncErr) {
+            console.warn('Auto-sync local group to Supabase notice:', syncErr);
+          }
+        }
+
         if (groupIds.length > 0) {
           const { data: groupsData, error: groupsErr } = await supabase
             .from('groups')
@@ -788,22 +817,28 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       return { group: data as Group, error: null };
     } catch (err: unknown) {
-      console.error('Supabase create_group error, falling back to direct table insert:', err);
+      console.error('Supabase create_group RPC error, trying direct table insert:', err);
       // Fallback direct table inserts
       try {
-        await supabase.from('groups').insert({
+        const { error: gErr } = await supabase.from('groups').insert({
           id: newId,
           name,
           description: description || null,
           currency,
           join_code: joinCode,
+          invite_code: joinCode,
           created_by: currentUserId,
         });
-        await supabase.from('group_members').insert({
+        if (gErr) throw gErr;
+
+        const { error: memErr } = await supabase.from('group_members').insert({
           group_id: newId,
           user_id: currentUserId,
           role: 'admin',
         });
+        if (memErr && memErr.code !== '23505') throw memErr;
+
+        await refreshGroupData();
         addToast({
           type: 'success',
           title: 'Group Created',
@@ -811,6 +846,18 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
         return { group: newGroup, error: null };
       } catch (fallbackErr) {
+        console.error('Direct table insert error, queued offline:', fallbackErr);
+        await enqueueSyncItem({
+          id: generateUUID(),
+          temp_id: newId,
+          action: 'create_group',
+          entity: 'group',
+          payload: newGroup,
+          status: 'pending',
+          created_at: nowStr,
+          retry_count: 0,
+        });
+        await refreshPendingCount();
         return { group: newGroup, error: fallbackErr as Error };
       }
     }
@@ -901,9 +948,61 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return { group: joinedGroup, error: null };
       }
 
-      // 2. Clear error diagnostics if RPC call returned an error
+      // 2. Direct fallback query if RPC call returned an error
       if (error) {
-        console.error('RPC join_group_by_code error:', error);
+        console.warn('RPC join_group_by_code notice, trying client fallback query:', error);
+
+        // Fallback: Query groups directly by matching join_code or invite_code
+        const { data: groupData, error: groupFetchErr } = await supabase
+          .from('groups')
+          .select('*')
+          .or(`join_code.ilike.${standardPrefixCode},join_code.ilike.${rawInput},join_code.ilike.%${strippedCode}%,invite_code.ilike.${standardPrefixCode},invite_code.ilike.${rawInput}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (groupData && !groupFetchErr) {
+          // Check if already a member
+          const { data: existingMem } = await supabase
+            .from('group_members')
+            .select('id')
+            .eq('group_id', groupData.id)
+            .eq('user_id', currentUserId)
+            .maybeSingle();
+
+          if (!existingMem) {
+            await supabase.from('group_members').insert({
+              group_id: groupData.id,
+              user_id: currentUserId,
+              role: 'member',
+            });
+          }
+
+          const joinedGroup: Group = {
+            id: groupData.id,
+            name: groupData.name,
+            description: groupData.description || null,
+            currency: groupData.currency || '₹',
+            join_code: groupData.join_code,
+            created_by: groupData.created_by,
+            created_at: groupData.created_at,
+            sync_status: 'synced',
+            member_count: 2,
+          };
+
+          setGroups((prev) => [joinedGroup, ...prev.filter((g) => g.id !== joinedGroup.id)]);
+          await saveLocalGroup(joinedGroup);
+          setActiveGroupId(joinedGroup.id);
+          await refreshGroupData();
+
+          addToast({
+            type: 'success',
+            title: existingMem ? 'Switched to Group' : 'Joined Group!',
+            message: existingMem
+              ? `You are already a member of "${groupData.name}".`
+              : `You have successfully joined "${groupData.name}".`,
+          });
+          return { group: joinedGroup, error: null };
+        }
 
         if (error.message && error.message.includes('No matching group found')) {
           const msg = `Invalid invite code (${rawInput}). No matching group found.`;

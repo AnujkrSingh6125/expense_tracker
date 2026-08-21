@@ -175,14 +175,10 @@ CREATE POLICY "Users can insert own profile"
 
 -- 8. RLS Policies for GROUPS
 DROP POLICY IF EXISTS "Members can view groups they belong to" ON public.groups;
-CREATE POLICY "Members can view groups they belong to"
+DROP POLICY IF EXISTS "Anyone can view groups by code or membership" ON public.groups;
+CREATE POLICY "Anyone can view groups by code or membership"
   ON public.groups FOR SELECT
-  USING (
-    auth.uid() = created_by OR
-    id IN (
-      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid()
-    )
-  );
+  USING (true);
 
 DROP POLICY IF EXISTS "Authenticated users can create groups" ON public.groups;
 CREATE POLICY "Authenticated users can create groups"
