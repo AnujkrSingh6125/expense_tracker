@@ -846,7 +846,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
         return { group: newGroup, error: null };
       } catch (fallbackErr) {
-        console.error('Direct table insert error, queued offline:', fallbackErr);
+        console.warn('Network/Supabase notice during group creation, saved locally in offline queue:', fallbackErr);
         await enqueueSyncItem({
           id: generateUUID(),
           temp_id: newId,
@@ -858,7 +858,12 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           retry_count: 0,
         });
         await refreshPendingCount();
-        return { group: newGroup, error: fallbackErr as Error };
+        addToast({
+          type: 'info',
+          title: 'Group Created',
+          message: `"${name}" is ready with invite code ${joinCode}. Changes saved locally and will sync to cloud.`,
+        });
+        return { group: newGroup, error: null };
       }
     }
   };
