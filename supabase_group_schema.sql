@@ -1,9 +1,23 @@
--- ==========================================================
--- Expense Tracker Multi-User Collaborative Group Schema
--- PostgreSQL / Supabase
--- ==========================================================
+-- ====================================================================
+-- Expense Tracker: Multi-User Collaborative Group Schema & Security Setup
+-- PostgreSQL / Supabase Migration
+-- Completely Self-Contained & Idempotent (Safe to run multiple times)
+-- ====================================================================
 
--- 0. Ensure profiles exist for all existing Supabase Auth users
+-- 0. Ensure public.profiles table exists and is populated
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  full_name TEXT,
+  currency TEXT DEFAULT '₹',
+  pin_hash TEXT,
+  biometric_enabled BOOLEAN DEFAULT FALSE,
+  biometric_credential_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Backfill profile records for any existing auth.users
 INSERT INTO public.profiles (id, email, full_name, currency)
 SELECT 
   id,
@@ -19,17 +33,39 @@ CREATE TABLE IF NOT EXISTS public.groups (
   name TEXT NOT NULL,
   description TEXT,
   currency TEXT DEFAULT '₹',
-  join_code TEXT NOT NULL UNIQUE,
-  created_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  join_code TEXT UNIQUE NOT NULL,
+  invite_code TEXT,
+  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Trigger to sync join_code and invite_code columns
+CREATE OR REPLACE FUNCTION public.sync_group_codes()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.join_code IS NULL AND NEW.invite_code IS NOT NULL THEN
+    NEW.join_code := NEW.invite_code;
+  ELSIF NEW.invite_code IS NULL AND NEW.join_code IS NOT NULL THEN
+    NEW.invite_code := NEW.join_code;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trigger_sync_group_codes ON public.groups;
+CREATE TRIGGER trigger_sync_group_codes
+  BEFORE INSERT OR UPDATE ON public.groups
+  FOR EACH ROW
+  EXECUTE FUNCTION public.sync_group_codes();
 
 -- 2. Create GROUP_MEMBERS table
 CREATE TABLE IF NOT EXISTS public.group_members (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   role TEXT DEFAULT 'member' CHECK (role IN ('admin', 'member')),
   joined_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT unique_group_member UNIQUE (group_id, user_id)
@@ -39,53 +75,112 @@ CREATE TABLE IF NOT EXISTS public.group_members (
 CREATE TABLE IF NOT EXISTS public.group_expenses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
-  paid_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  amount NUMERIC NOT NULL CHECK (amount > 0),
-  title TEXT NOT NULL,
+  paid_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  title TEXT NOT NULL DEFAULT 'Expense',
+  description TEXT,
   category TEXT NOT NULL DEFAULT 'General',
-  split_type TEXT DEFAULT 'equal' CHECK (split_type IN ('equal', 'custom', 'percentage')),
-  expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  split_type TEXT DEFAULT 'equal',
+  split_details JSONB DEFAULT '[]'::jsonb,
+  expense_date DATE DEFAULT CURRENT_DATE,
+  date TIMESTAMPTZ DEFAULT NOW(),
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Trigger to sync title/description and expense_date/date
+CREATE OR REPLACE FUNCTION public.sync_group_expense_fields()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.title IS NULL AND NEW.description IS NOT NULL THEN
+    NEW.title := NEW.description;
+  ELSIF NEW.description IS NULL AND NEW.title IS NOT NULL THEN
+    NEW.description := NEW.title;
+  END IF;
+
+  IF NEW.expense_date IS NULL AND NEW.date IS NOT NULL THEN
+    NEW.expense_date := NEW.date::DATE;
+  ELSIF NEW.date IS NULL AND NEW.expense_date IS NOT NULL THEN
+    NEW.date := NEW.expense_date::TIMESTAMPTZ;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trigger_sync_group_expense_fields ON public.group_expenses;
+CREATE TRIGGER trigger_sync_group_expense_fields
+  BEFORE INSERT OR UPDATE ON public.group_expenses
+  FOR EACH ROW
+  EXECUTE FUNCTION public.sync_group_expense_fields();
+
 -- 4. Create GROUP_EXPENSE_SPLITS table
 CREATE TABLE IF NOT EXISTS public.group_expense_splits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_expense_id UUID NOT NULL REFERENCES public.group_expenses(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  owed_amount NUMERIC NOT NULL CHECK (owed_amount >= 0),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  owed_amount NUMERIC(12,2) NOT NULL CHECK (owed_amount >= 0),
   settled BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT unique_expense_split UNIQUE (group_expense_id, user_id)
 );
 
--- Create Fast Query Indexes
+-- 5. Indexes for fast querying
+CREATE INDEX IF NOT EXISTS idx_groups_join_code ON public.groups(join_code);
+CREATE INDEX IF NOT EXISTS idx_groups_invite_code ON public.groups(invite_code);
+CREATE INDEX IF NOT EXISTS idx_groups_created_by ON public.groups(created_by);
 CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON public.group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON public.group_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_group_expenses_group_id ON public.group_expenses(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_expenses_paid_by ON public.group_expenses(paid_by);
 CREATE INDEX IF NOT EXISTS idx_group_splits_expense_id ON public.group_expense_splits(group_expense_id);
 CREATE INDEX IF NOT EXISTS idx_group_splits_user_id ON public.group_expense_splits(user_id);
-CREATE INDEX IF NOT EXISTS idx_groups_join_code ON public.groups(join_code);
 
--- Enable Row-Level Security (RLS)
+-- 6. Enable Row Level Security (RLS) on all tables
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_expense_splits ENABLE ROW LEVEL SECURITY;
 
--- 5. RLS Policies for GROUPS
+-- 7. RLS Policies for PROFILES
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+CREATE POLICY "Users can view own profile"
+  ON public.profiles FOR SELECT
+  USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Group members can view co-member profiles" ON public.profiles;
+CREATE POLICY "Group members can view co-member profiles"
+  ON public.profiles FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.group_members gm1
+      JOIN public.group_members gm2 ON gm1.group_id = gm2.group_id
+      WHERE gm1.user_id = auth.uid() AND gm2.user_id = profiles.id
+    )
+  );
+
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
+CREATE POLICY "Users can update own profile"
+  ON public.profiles FOR UPDATE
+  USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+CREATE POLICY "Users can insert own profile"
+  ON public.profiles FOR INSERT
+  WITH CHECK (auth.uid() = id);
+
+-- 8. RLS Policies for GROUPS
 DROP POLICY IF EXISTS "Members can view groups they belong to" ON public.groups;
 CREATE POLICY "Members can view groups they belong to"
   ON public.groups FOR SELECT
   USING (
     auth.uid() = created_by OR
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = groups.id
-      AND group_members.user_id = auth.uid()
+    id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid()
     )
   );
 
@@ -99,11 +194,8 @@ CREATE POLICY "Admins can update their groups"
   ON public.groups FOR UPDATE
   USING (
     auth.uid() = created_by OR
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = groups.id
-      AND group_members.user_id = auth.uid()
-      AND group_members.role = 'admin'
+    id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     )
   );
 
@@ -112,24 +204,18 @@ CREATE POLICY "Admins can delete their groups"
   ON public.groups FOR DELETE
   USING (
     auth.uid() = created_by OR
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = groups.id
-      AND group_members.user_id = auth.uid()
-      AND group_members.role = 'admin'
+    id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     )
   );
 
--- 6. RLS Policies for GROUP_MEMBERS
+-- 9. RLS Policies for GROUP_MEMBERS
 DROP POLICY IF EXISTS "Members can view group membership" ON public.group_members;
 CREATE POLICY "Members can view group membership"
   ON public.group_members FOR SELECT
   USING (
-    auth.uid() = user_id OR
-    EXISTS (
-      SELECT 1 FROM public.group_members AS gm
-      WHERE gm.group_id = group_members.group_id
-      AND gm.user_id = auth.uid()
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid()
     )
   );
 
@@ -138,16 +224,11 @@ CREATE POLICY "Users can insert themselves or admins can add members"
   ON public.group_members FOR INSERT
   WITH CHECK (
     auth.uid() = user_id OR
-    EXISTS (
-      SELECT 1 FROM public.group_members AS gm
-      WHERE gm.group_id = group_members.group_id
-      AND gm.user_id = auth.uid()
-      AND gm.role = 'admin'
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     ) OR
-    EXISTS (
-      SELECT 1 FROM public.groups
-      WHERE groups.id = group_members.group_id
-      AND groups.created_by = auth.uid()
+    group_id IN (
+      SELECT g.id FROM public.groups g WHERE g.created_by = auth.uid()
     )
   );
 
@@ -155,16 +236,11 @@ DROP POLICY IF EXISTS "Admins can update member roles" ON public.group_members;
 CREATE POLICY "Admins can update member roles"
   ON public.group_members FOR UPDATE
   USING (
-    EXISTS (
-      SELECT 1 FROM public.group_members AS gm
-      WHERE gm.group_id = group_members.group_id
-      AND gm.user_id = auth.uid()
-      AND gm.role = 'admin'
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     ) OR
-    EXISTS (
-      SELECT 1 FROM public.groups
-      WHERE groups.id = group_members.group_id
-      AND groups.created_by = auth.uid()
+    group_id IN (
+      SELECT g.id FROM public.groups g WHERE g.created_by = auth.uid()
     )
   );
 
@@ -173,28 +249,21 @@ CREATE POLICY "Members can leave or admins can remove members"
   ON public.group_members FOR DELETE
   USING (
     auth.uid() = user_id OR
-    EXISTS (
-      SELECT 1 FROM public.group_members AS gm
-      WHERE gm.group_id = group_members.group_id
-      AND gm.user_id = auth.uid()
-      AND gm.role = 'admin'
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     ) OR
-    EXISTS (
-      SELECT 1 FROM public.groups
-      WHERE groups.id = group_members.group_id
-      AND groups.created_by = auth.uid()
+    group_id IN (
+      SELECT g.id FROM public.groups g WHERE g.created_by = auth.uid()
     )
   );
 
--- 7. RLS Policies for GROUP_EXPENSES
+-- 10. RLS Policies for GROUP_EXPENSES
 DROP POLICY IF EXISTS "Group members can view expenses" ON public.group_expenses;
 CREATE POLICY "Group members can view expenses"
   ON public.group_expenses FOR SELECT
   USING (
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = group_expenses.group_id
-      AND group_members.user_id = auth.uid()
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid()
     )
   );
 
@@ -202,49 +271,40 @@ DROP POLICY IF EXISTS "Group members can insert expenses" ON public.group_expens
 CREATE POLICY "Group members can insert expenses"
   ON public.group_expenses FOR INSERT
   WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = group_expenses.group_id
-      AND group_members.user_id = auth.uid()
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid()
     )
   );
 
-DROP POLICY IF EXISTS "Payer or admin can update expense" ON public.group_expenses;
-CREATE POLICY "Payer or admin can update expense"
+DROP POLICY IF EXISTS "Group members can update expenses" ON public.group_expenses;
+CREATE POLICY "Group members can update expenses"
   ON public.group_expenses FOR UPDATE
   USING (
     auth.uid() = paid_by OR
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = group_expenses.group_id
-      AND group_members.user_id = auth.uid()
-      AND group_members.role = 'admin'
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     )
   );
 
-DROP POLICY IF EXISTS "Payer or admin can delete expense" ON public.group_expenses;
-CREATE POLICY "Payer or admin can delete expense"
+DROP POLICY IF EXISTS "Group members can delete expenses" ON public.group_expenses;
+CREATE POLICY "Group members can delete expenses"
   ON public.group_expenses FOR DELETE
   USING (
     auth.uid() = paid_by OR
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_members.group_id = group_expenses.group_id
-      AND group_members.user_id = auth.uid()
-      AND group_members.role = 'admin'
+    group_id IN (
+      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid() AND gm.role = 'admin'
     )
   );
 
--- 8. RLS Policies for GROUP_EXPENSE_SPLITS
+-- 11. RLS Policies for GROUP_EXPENSE_SPLITS
 DROP POLICY IF EXISTS "Group members can view splits" ON public.group_expense_splits;
 CREATE POLICY "Group members can view splits"
   ON public.group_expense_splits FOR SELECT
   USING (
-    EXISTS (
-      SELECT 1 FROM public.group_expenses ge
+    group_expense_id IN (
+      SELECT ge.id FROM public.group_expenses ge
       JOIN public.group_members gm ON gm.group_id = ge.group_id
-      WHERE ge.id = group_expense_splits.group_expense_id
-      AND gm.user_id = auth.uid()
+      WHERE gm.user_id = auth.uid()
     )
   );
 
@@ -252,41 +312,38 @@ DROP POLICY IF EXISTS "Group members can insert splits" ON public.group_expense_
 CREATE POLICY "Group members can insert splits"
   ON public.group_expense_splits FOR INSERT
   WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.group_expenses ge
+    group_expense_id IN (
+      SELECT ge.id FROM public.group_expenses ge
       JOIN public.group_members gm ON gm.group_id = ge.group_id
-      WHERE ge.id = group_expense_splits.group_expense_id
-      AND gm.user_id = auth.uid()
+      WHERE gm.user_id = auth.uid()
     )
   );
 
-DROP POLICY IF EXISTS "Members or payer can update split settlement" ON public.group_expense_splits;
-CREATE POLICY "Members or payer can update split settlement"
+DROP POLICY IF EXISTS "Group members can update splits" ON public.group_expense_splits;
+CREATE POLICY "Group members can update splits"
   ON public.group_expense_splits FOR UPDATE
   USING (
-    auth.uid() = user_id OR
-    EXISTS (
-      SELECT 1 FROM public.group_expenses ge
-      WHERE ge.id = group_expense_splits.group_expense_id
-      AND ge.paid_by = auth.uid()
+    group_expense_id IN (
+      SELECT ge.id FROM public.group_expenses ge
+      JOIN public.group_members gm ON gm.group_id = ge.group_id
+      WHERE gm.user_id = auth.uid()
     )
   );
 
-DROP POLICY IF EXISTS "Payer or admin can delete splits" ON public.group_expense_splits;
-CREATE POLICY "Payer or admin can delete splits"
+DROP POLICY IF EXISTS "Group members can delete splits" ON public.group_expense_splits;
+CREATE POLICY "Group members can delete splits"
   ON public.group_expense_splits FOR DELETE
   USING (
-    EXISTS (
-      SELECT 1 FROM public.group_expenses ge
-      WHERE ge.id = group_expense_splits.group_expense_id
-      AND (ge.paid_by = auth.uid() OR EXISTS (
-        SELECT 1 FROM public.group_members gm
-        WHERE gm.group_id = ge.group_id AND gm.user_id = auth.uid() AND gm.role = 'admin'
-      ))
+    group_expense_id IN (
+      SELECT ge.id FROM public.group_expenses ge
+      JOIN public.group_members gm ON gm.group_id = ge.group_id
+      WHERE gm.user_id = auth.uid()
     )
   );
 
--- 9. Helper Database RPC Functions
+-- ====================================================================
+-- 12. Helper Database RPC Functions (SECURITY DEFINER)
+-- ====================================================================
 
 -- Function: create_group_with_admin
 CREATE OR REPLACE FUNCTION public.create_group_with_admin(
@@ -308,10 +365,10 @@ DECLARE
 BEGIN
   v_user_id := auth.uid();
   IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'Not authenticated';
+    RAISE EXCEPTION 'Not authenticated.';
   END IF;
 
-  -- Generate 6-char alphanumeric code if not provided
+  -- Generate 6-char code if none provided
   IF p_join_code IS NULL OR length(trim(p_join_code)) < 4 THEN
     v_code := 'EXP-' || UPPER(substring(md5(random()::text) from 1 for 4));
   ELSE
@@ -319,8 +376,8 @@ BEGIN
   END IF;
 
   -- Insert group
-  INSERT INTO public.groups (name, description, currency, join_code, created_by)
-  VALUES (p_name, p_description, COALESCE(p_currency, '₹'), v_code, v_user_id)
+  INSERT INTO public.groups (name, description, currency, join_code, invite_code, created_by)
+  VALUES (p_name, p_description, COALESCE(p_currency, '₹'), v_code, v_code, v_user_id)
   RETURNING id INTO v_group_id;
 
   -- Insert creator as admin
@@ -333,6 +390,7 @@ BEGIN
     'description', g.description,
     'currency', g.currency,
     'join_code', g.join_code,
+    'invite_code', g.invite_code,
     'created_by', g.created_by,
     'created_at', g.created_at
   ) INTO v_result
@@ -343,7 +401,7 @@ BEGIN
 END;
 $$;
 
--- Function: join_group_by_code (with case, whitespace, and prefix tolerance)
+-- Function: join_group_by_code (with full case, whitespace, and prefix tolerance)
 CREATE OR REPLACE FUNCTION public.join_group_by_code(p_code TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -373,13 +431,13 @@ BEGIN
   v_normalized_suffix := UPPER(regexp_replace(v_clean_code, '^EXP[-\s_]?', '', 'i'));
   v_prefixed_code := 'EXP-' || v_normalized_suffix;
 
-  -- Find group by join_code using multiple tolerant matching strategies
+  -- Find group by join_code/invite_code using multiple tolerant matching strategies
   SELECT * INTO v_group
   FROM public.groups
-  WHERE UPPER(trim(regexp_replace(join_code, '^EXP[-\s_]?', '', 'i'))) = v_normalized_suffix
-     OR UPPER(trim(join_code)) = v_clean_code
-     OR UPPER(trim(join_code)) = v_prefixed_code
-     OR UPPER(trim(replace(join_code, '-', ''))) = UPPER(trim(replace(v_clean_code, '-', '')))
+  WHERE UPPER(trim(regexp_replace(COALESCE(join_code, invite_code), '^EXP[-\s_]?', '', 'i'))) = v_normalized_suffix
+     OR UPPER(trim(COALESCE(join_code, invite_code))) = v_clean_code
+     OR UPPER(trim(COALESCE(join_code, invite_code))) = v_prefixed_code
+     OR UPPER(trim(replace(COALESCE(join_code, invite_code), '-', ''))) = UPPER(trim(replace(v_clean_code, '-', '')))
   LIMIT 1;
 
   IF v_group.id IS NULL THEN
@@ -405,7 +463,8 @@ BEGIN
     'name', v_group.name,
     'description', v_group.description,
     'currency', v_group.currency,
-    'join_code', v_group.join_code,
+    'join_code', COALESCE(v_group.join_code, v_group.invite_code),
+    'invite_code', COALESCE(v_group.invite_code, v_group.join_code),
     'created_by', v_group.created_by,
     'created_at', v_group.created_at,
     'already_member', v_already_member,
@@ -454,11 +513,9 @@ BEGIN
     RAISE EXCEPTION 'Not authenticated.';
   END IF;
 
-  -- Delete member entry
   DELETE FROM public.group_members
   WHERE group_id = p_group_id AND user_id = v_user_id;
 
-  -- Check remaining members; if zero, delete group
   SELECT COUNT(*) INTO v_member_count
   FROM public.group_members
   WHERE group_id = p_group_id;
@@ -490,7 +547,6 @@ BEGIN
     RAISE EXCEPTION 'Not authenticated.';
   END IF;
 
-  -- Verify caller is admin or group creator
   SELECT EXISTS (
     SELECT 1 FROM public.group_members
     WHERE group_id = p_group_id AND user_id = v_caller_id AND role = 'admin'
@@ -531,10 +587,9 @@ BEGIN
   END IF;
 
   IF p_new_role NOT IN ('admin', 'member') THEN
-    RAISE EXCEPTION 'Invalid role. Role must be admin or member.';
+    RAISE EXCEPTION 'Invalid role. Must be admin or member.';
   END IF;
 
-  -- Verify caller is admin or group creator
   SELECT EXISTS (
     SELECT 1 FROM public.group_members
     WHERE group_id = p_group_id AND user_id = v_caller_id AND role = 'admin'
@@ -571,7 +626,6 @@ BEGIN
     RAISE EXCEPTION 'Not authenticated.';
   END IF;
 
-  -- Verify caller is admin or group creator
   SELECT EXISTS (
     SELECT 1 FROM public.group_members
     WHERE group_id = p_group_id AND user_id = v_caller_id AND role = 'admin'
@@ -590,7 +644,13 @@ BEGIN
 END;
 $$;
 
--- Grant execution permissions
+-- 13. Grant Permissions to authenticated and service_role
+GRANT ALL ON public.profiles TO authenticated, service_role;
+GRANT ALL ON public.groups TO authenticated, service_role;
+GRANT ALL ON public.group_members TO authenticated, service_role;
+GRANT ALL ON public.group_expenses TO authenticated, service_role;
+GRANT ALL ON public.group_expense_splits TO authenticated, service_role;
+
 GRANT EXECUTE ON FUNCTION public.create_group_with_admin(TEXT, TEXT, TEXT, TEXT) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.join_group_by_code(TEXT) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.leave_group(UUID) TO authenticated, anon, service_role;
@@ -598,7 +658,17 @@ GRANT EXECUTE ON FUNCTION public.remove_group_member(UUID, UUID) TO authenticate
 GRANT EXECUTE ON FUNCTION public.update_group_member_role(UUID, UUID, TEXT) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_group_by_admin(UUID) TO authenticated, anon, service_role;
 
--- Force PostgREST schema cache reload immediately
+-- 14. Enable Supabase Realtime for Group Collaboration
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.groups, public.group_members, public.group_expenses, public.group_expense_splits;
+  EXCEPTION WHEN OTHERS THEN
+    -- If already added or publication doesn't exist, ignore
+    NULL;
+  END;
+END;
+$$;
+
+-- 15. Force PostgREST schema reload
 NOTIFY pgrst, 'reload schema';
-
-

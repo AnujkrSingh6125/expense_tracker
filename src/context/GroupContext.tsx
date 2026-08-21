@@ -326,6 +326,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const queue = await getPendingSyncQueue();
       if (queue.length === 0) {
         setIsSyncing(false);
+        setPendingSyncCount(0);
         return;
       }
 
@@ -341,7 +342,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               join_code: payload.join_code,
               created_by: payload.created_by,
             });
-            if (error) throw error;
+            if (error && error.code !== '23505') throw error;
             // Also insert admin membership
             await supabase.from('group_members').insert({
               group_id: payload.id,
@@ -365,7 +366,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               expense_date: payload.expense_date,
               notes: payload.notes,
             });
-            if (expErr) throw expErr;
+            if (expErr && expErr.code !== '23505') throw expErr;
 
             // Insert splits
             if (splits.length > 0) {
@@ -378,7 +379,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   settled: s.settled,
                 }))
               );
-              if (splitErr) throw splitErr;
+              if (splitErr && splitErr.code !== '23505') throw splitErr;
             }
 
             // Update local state to mark synced
@@ -414,23 +415,30 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             if (error) throw error;
             await removeSyncItem(item.id);
           }
-        } catch (itemErr) {
+        } catch (itemErr: any) {
           console.error('Error syncing queue item:', item.action, itemErr);
+          // If record already exists or duplicate key error, safely remove from queue
+          if (itemErr?.code === '23505' || itemErr?.message?.includes('duplicate key') || itemErr?.message?.includes('already exists')) {
+            await removeSyncItem(item.id);
+          }
         }
       }
 
-      await refreshPendingCount();
-      addToast({
-        type: 'success',
-        title: 'All Changes Synchronized',
-        message: 'Your offline group changes were uploaded to the cloud.',
-      });
+      const remainingQueue = await getPendingSyncQueue();
+      setPendingSyncCount(remainingQueue.length);
+      if (remainingQueue.length === 0 && queue.length > 0) {
+        addToast({
+          type: 'success',
+          title: 'All Changes Synchronized',
+          message: 'Your offline group changes were uploaded to the cloud.',
+        });
+      }
     } catch (err) {
       console.error('Failed to sync offline queue:', err);
     } finally {
       setIsSyncing(false);
     }
-  }, [isOnline, isSyncing, isDemoMode, refreshPendingCount, addToast]);
+  }, [isOnline, isSyncing, isDemoMode, addToast]);
 
   // Online / Offline network listeners
   useEffect(() => {
@@ -556,37 +564,36 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
 
-        // Fetch members with profiles from Supabase
-        const { data: membersData, error: memErr } = await supabase
-          .from('group_members')
-          .select('*, profile:profiles(*)')
-          .eq('group_id', activeGroupId);
-
-        if (memErr) throw memErr;
-
-        // Fetch expenses with payer profiles
-        const { data: expensesData, error: expErr } = await supabase
-          .from('group_expenses')
-          .select('*, payer_profile:profiles(*)')
-          .eq('group_id', activeGroupId)
-          .order('expense_date', { ascending: false });
-
-        if (expErr) throw expErr;
-
-        // Fetch all splits for this group's expenses
-        const expenseIds = (expensesData || []).map((e) => e.id);
-        let splitsData: GroupExpenseSplit[] = [];
-
-        if (expenseIds.length > 0) {
-          const { data: sData, error: sErr } = await supabase
+        // Fetch from Supabase with Profiles
+        const [membersRes, expensesRes, splitsRes] = await Promise.all([
+          supabase
+            .from('group_members')
+            .select('*, profile:profiles(*)')
+            .eq('group_id', activeGroupId),
+          supabase
+            .from('group_expenses')
+            .select('*, payer_profile:profiles(*)')
+            .eq('group_id', activeGroupId)
+            .order('expense_date', { ascending: false }),
+          supabase
             .from('group_expense_splits')
             .select('*, user_profile:profiles(*)')
-            .in('group_expense_id', expenseIds);
-          if (sErr) throw sErr;
-          splitsData = (sData || []) as GroupExpenseSplit[];
-        }
+            .in(
+              'group_expense_id',
+              (
+                await supabase
+                  .from('group_expenses')
+                  .select('id')
+                  .eq('group_id', activeGroupId)
+              ).data?.map((e) => e.id) || []
+            ),
+        ]);
 
         if (isMounted) {
+          const membersData = membersRes.data || [];
+          const expensesData = expensesRes.data || [];
+          const splitsData = (splitsRes.data || []) as GroupExpenseSplit[];
+
           const formattedExpenses = (expensesData || []).map((e) => ({
             ...e,
             sync_status: 'synced' as const,
@@ -618,7 +625,15 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let channel: any = null;
     if (isSupabaseConfigured && !isDemoMode && activeGroupId) {
       channel = supabase
-        .channel(`group-realtime-${activeGroupId}`)
+        .channel(`group-live-room-${activeGroupId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${activeGroupId}` },
+          () => {
+            loadActiveGroupDetails();
+            refreshGroupData();
+          }
+        )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'group_expenses', filter: `group_id=eq.${activeGroupId}` },
@@ -633,6 +648,14 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             loadActiveGroupDetails();
           }
         )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'groups', filter: `id=eq.${activeGroupId}` },
+          () => {
+            refreshGroupData();
+            loadActiveGroupDetails();
+          }
+        )
         .subscribe();
     }
 
@@ -640,12 +663,34 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isMounted = false;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [activeGroupId, user, isDemoMode, currentUserId, currentUserName, userCurrency]);
+  }, [activeGroupId, user, isDemoMode, currentUserId, currentUserName, userCurrency, refreshGroupData]);
 
-  // Initial Load on mount or auth change
+  // Global Realtime Subscription for user's group memberships
+  useEffect(() => {
+    if (!isSupabaseConfigured || isDemoMode || !user) return;
+    const userMembershipsChannel = supabase
+      .channel(`user-memberships-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_members', filter: `user_id=eq.${user.id}` },
+        () => {
+          refreshGroupData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(userMembershipsChannel);
+    };
+  }, [user, isDemoMode, refreshGroupData]);
+
+  // Initial Load on mount or auth change + Flush Queue
   useEffect(() => {
     refreshGroupData();
-  }, [refreshGroupData]);
+    if (isOnline && isSupabaseConfigured && !isDemoMode) {
+      syncPendingQueue();
+    }
+  }, [refreshGroupData, isOnline, syncPendingQueue, isDemoMode]);
 
   // CRUD: Create Group
   const createGroup = async (
