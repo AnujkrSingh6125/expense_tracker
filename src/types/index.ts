@@ -28,6 +28,8 @@ export interface Profile {
   pin_hash: string | null;
   biometric_enabled: boolean;
   biometric_credential_id: string | null;
+  custom_domain?: string | null; // e.g. "acme-corp" or workspace handle
+  custom_domains?: string[]; // e.g. ["Personal", "Business", "Freelance", "Side-Hustle", "Trip"]
   created_at?: string;
   updated_at?: string;
 }
@@ -48,6 +50,7 @@ export interface Expense {
   user_id: string;
   amount: number;
   category: ExpenseCategory | string;
+  domain?: string; // e.g. 'Personal', 'Business', 'Freelance'
   description: string | null;
   payment_method: PaymentMethod;
   expense_date: string; // YYYY-MM-DD
@@ -58,6 +61,7 @@ export interface Expense {
 export interface ExpenseFilterState {
   searchQuery: string;
   category: string; // 'All' or specific category
+  domain?: string; // 'All' or specific domain
   paymentMethod: string; // 'All' or specific method
   startDate: string; // YYYY-MM-DD or empty
   endDate: string; // YYYY-MM-DD or empty
@@ -105,6 +109,10 @@ export interface MonthlySpendingHistory {
   monthName: string;
   amount: number;
   budgetLimit: number;
+  count: number;
+  topCategory?: string;
+  momChangePct?: number | null;
+  domainBreakdown?: Record<string, number>;
 }
 
 export type ActiveTab = 'dashboard' | 'analytics' | 'expenses' | 'budgets' | 'settings';
@@ -167,6 +175,7 @@ export interface GroupExpense {
   amount: number;
   title: string;
   category: string;
+  domain?: string; // e.g. 'General', 'Trip', 'Project', 'Household'
   split_type: SplitType;
   expense_date: string; // YYYY-MM-DD
   notes?: string | null;

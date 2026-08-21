@@ -37,6 +37,8 @@ const DEFAULT_DEMO_PROFILE: Profile = {
   pin_hash: null,
   biometric_enabled: false,
   biometric_credential_id: null,
+  custom_domain: 'alex-workspace',
+  custom_domains: ['Personal', 'Business', 'Freelance', 'Side-Hustle', 'Household', 'Travel/Trip'],
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -73,6 +75,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             pin_hash: null,
             biometric_enabled: false,
             biometric_credential_id: null,
+            custom_domain: null,
+            custom_domains: ['Personal', 'Business', 'Freelance', 'Side-Hustle', 'Household', 'Travel/Trip'],
           };
           await supabase.from('profiles').insert(newProfile);
           setProfile(newProfile);

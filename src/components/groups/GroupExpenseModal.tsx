@@ -4,9 +4,9 @@ import { useAuth } from '../../context/AuthContext';
 import { Modal } from '../ui/Modal';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { STANDARD_CATEGORIES } from '../../lib/constants';
+import { STANDARD_CATEGORIES, DEFAULT_DOMAINS, getDomainMeta } from '../../lib/constants';
 import { SplitType, GroupExpense, CategoryMeta } from '../../types';
-import { Receipt, DollarSign, Calendar, FileText, User, AlertCircle } from 'lucide-react';
+import { Receipt, DollarSign, Calendar, FileText, User, AlertCircle, Layers, Check } from 'lucide-react';
 
 interface GroupExpenseModalProps {
   isOpen: boolean;
@@ -20,11 +20,12 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
   expenseToEdit,
 }) => {
   const { activeGroup, groupMembers, addGroupExpense, updateGroupExpense } = useGroups();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
 
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState('Party/Dining');
+  const [domain, setDomain] = useState('General');
   const [paidBy, setPaidBy] = useState('');
   const [splitType, setSplitType] = useState<SplitType>('equal');
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -35,6 +36,7 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
 
   const currencySymbol = activeGroup?.currency || '₹';
   const currentUserId = user?.id || 'demo-user-12345';
+  const availableDomains = ['General', ...(profile?.custom_domains || DEFAULT_DOMAINS)];
 
   // Initialize or reset form on open
   useEffect(() => {
@@ -43,6 +45,7 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
         setTitle(expenseToEdit.title);
         setAmount(expenseToEdit.amount.toString());
         setCategory(expenseToEdit.category);
+        setDomain(expenseToEdit.domain || 'General');
         setPaidBy(expenseToEdit.paid_by);
         setSplitType(expenseToEdit.split_type);
         setExpenseDate(expenseToEdit.expense_date);
@@ -127,6 +130,7 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
           title: title.trim(),
           amount: numAmount,
           category,
+          domain: domain || 'General',
           paid_by: paidBy,
           split_type: splitType,
           expense_date: expenseDate,
@@ -143,6 +147,7 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
           title: title.trim(),
           amount: numAmount,
           category,
+          domain: domain || 'General',
           paid_by: paidBy,
           split_type: splitType,
           expense_date: expenseDate,
@@ -209,6 +214,39 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
                 </option>
               ))}
             </select>
+          </div>
+        </div>
+
+        {/* Expense Domain Tag Selector */}
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold uppercase tracking-wider text-surface-600 dark:text-surface-300 flex items-center gap-1.5">
+            <Layers className="w-3.5 h-3.5 text-brand-500" />
+            <span>Expense Domain Tag</span>
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {availableDomains.map((dom) => {
+              const meta = getDomainMeta(dom);
+              const isSelected = domain === dom;
+              return (
+                <button
+                  key={dom}
+                  type="button"
+                  onClick={() => setDomain(dom)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border ${
+                    isSelected
+                      ? 'border-brand-500 bg-brand-50/80 dark:bg-brand-950/50 text-brand-700 dark:text-brand-300 ring-2 ring-brand-500/20 shadow-sm'
+                      : 'border-surface-200 dark:border-surface-700/70 bg-white dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-50 dark:hover:bg-surface-700/50'
+                  }`}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: meta.color }}
+                  />
+                  <span>{dom}</span>
+                  {isSelected && <Check className="w-3 h-3 text-brand-600" />}
+                </button>
+              );
+            })}
           </div>
         </div>
 

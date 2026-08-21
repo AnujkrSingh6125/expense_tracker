@@ -126,6 +126,79 @@ export const MONTH_NAMES_SHORT = [
   'Dec',
 ];
 
+export const DEFAULT_DOMAINS = [
+  'Personal',
+  'Business',
+  'Freelance',
+  'Side-Hustle',
+  'Household',
+  'Travel/Trip',
+];
+
+export function getDomainMeta(domainName: string): { name: string; color: string; bgColor: string; textColor: string } {
+  const map: Record<string, { color: string; bgColor: string; textColor: string }> = {
+    Personal: {
+      color: '#6366f1',
+      bgColor: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800/40',
+      textColor: 'text-indigo-500',
+    },
+    Business: {
+      color: '#0ea5e9',
+      bgColor: 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-200 dark:border-sky-800/40',
+      textColor: 'text-sky-500',
+    },
+    Freelance: {
+      color: '#10b981',
+      bgColor: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/40',
+      textColor: 'text-emerald-500',
+    },
+    'Side-Hustle': {
+      color: '#f59e0b',
+      bgColor: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/40',
+      textColor: 'text-amber-500',
+    },
+    Household: {
+      color: '#ec4899',
+      bgColor: 'bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-200 dark:border-pink-800/40',
+      textColor: 'text-pink-500',
+    },
+    'Travel/Trip': {
+      color: '#8b5cf6',
+      bgColor: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-800/40',
+      textColor: 'text-purple-500',
+    },
+    General: {
+      color: '#64748b',
+      bgColor: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800/40',
+      textColor: 'text-slate-500',
+    },
+  };
+
+  if (map[domainName]) {
+    return { name: domainName, ...map[domainName] };
+  }
+
+  // Dynamic color for custom user-created domains
+  const palette = [
+    { color: '#14b8a6', bg: 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-200 dark:border-teal-800/40', text: 'text-teal-500' },
+    { color: '#f97316', bg: 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800/40', text: 'text-orange-500' },
+    { color: '#a855f7', bg: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-800/40', text: 'text-purple-500' },
+    { color: '#06b6d4', bg: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-200 dark:border-cyan-800/40', text: 'text-cyan-500' },
+  ];
+  let hash = 0;
+  for (let i = 0; i < (domainName || '').length; i++) {
+    hash = domainName.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const chosen = palette[Math.abs(hash) % palette.length];
+
+  return {
+    name: domainName || 'Personal',
+    color: chosen.color,
+    bgColor: chosen.bg,
+    textColor: chosen.text,
+  };
+}
+
 export function getCategoryMeta(categoryName: string): CategoryMeta {
   const match = STANDARD_CATEGORIES.find(
     (c) => c.name.toLowerCase() === categoryName.toLowerCase() || c.id.toLowerCase() === categoryName.toLowerCase()

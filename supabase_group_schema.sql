@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS public.group_expenses (
   title TEXT NOT NULL DEFAULT 'Expense',
   description TEXT,
   category TEXT NOT NULL DEFAULT 'General',
+  domain TEXT DEFAULT 'General',
   split_type TEXT DEFAULT 'equal',
   split_details JSONB DEFAULT '[]'::jsonb,
   expense_date DATE DEFAULT CURRENT_DATE,
@@ -118,6 +119,9 @@ CREATE TABLE IF NOT EXISTS public.group_expenses (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Backward-compatible schema alteration for group_expenses
+ALTER TABLE public.group_expenses ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT 'General';
 
 -- Trigger to sync title/description and expense_date/date
 CREATE OR REPLACE FUNCTION public.sync_group_expense_fields()

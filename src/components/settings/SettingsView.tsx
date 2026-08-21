@@ -4,7 +4,7 @@ import { useSecurity } from '../../context/SecurityContext';
 import { useExpenses } from '../../context/ExpenseContext';
 import { useTheme } from '../../context/ThemeContext';
 import { exportExpensesToCSV, exportExpensesToJSON } from '../../lib/exportUtils';
-import { CURRENCIES } from '../../lib/constants';
+import { CURRENCIES, DEFAULT_DOMAINS, getDomainMeta } from '../../lib/constants';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import {
@@ -21,6 +21,10 @@ import {
   AlertOctagon,
   X,
   AlertTriangle,
+  Layers,
+  Plus,
+  Globe,
+  Tag,
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -39,7 +43,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [currency, setCurrency] = useState(profile?.currency || '₹');
+  const [customDomain, setCustomDomain] = useState(profile?.custom_domain || '');
+  const [domainTags, setDomainTags] = useState<string[]>(profile?.custom_domains || DEFAULT_DOMAINS);
+  const [newTagInput, setNewTagInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingDomains, setIsSavingDomains] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
@@ -47,6 +55,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   React.useEffect(() => {
     if (profile?.full_name !== undefined) setFullName(profile.full_name || '');
     if (profile?.currency !== undefined) setCurrency(profile.currency || '₹');
+    if (profile?.custom_domain !== undefined) setCustomDomain(profile.custom_domain || '');
+    if (profile?.custom_domains) setDomainTags(profile.custom_domains);
   }, [profile]);
 
   const handleCurrencyChange = async (newCurrency: string) => {
@@ -89,6 +99,55 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         message: 'Your personal preferences have been saved.',
       });
     }
+  };
+
+  const handleSaveDomains = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingDomains(true);
+    const { error } = await updateProfile({
+      custom_domain: customDomain.trim() || null,
+      custom_domains: domainTags,
+    });
+    setIsSavingDomains(false);
+
+    if (error) {
+      addToast({
+        type: 'error',
+        title: 'Domain Settings Failed',
+        message: error.message || 'Could not update domain configuration.',
+      });
+    } else {
+      addToast({
+        type: 'success',
+        title: 'Workspace Domains Updated',
+        message: 'Your custom domain and expense tags have been saved.',
+      });
+    }
+  };
+
+  const handleAddDomainTag = () => {
+    const trimmed = newTagInput.trim();
+    if (!trimmed) return;
+    if (domainTags.includes(trimmed)) {
+      addToast({ type: 'warning', title: 'Tag Exists', message: `Domain tag "${trimmed}" is already present.` });
+      return;
+    }
+    const updated = [...domainTags, trimmed];
+    setDomainTags(updated);
+    setNewTagInput('');
+    updateProfile({ custom_domains: updated });
+    addToast({ type: 'success', title: 'Domain Added', message: `Added "${trimmed}" to domain tags.` });
+  };
+
+  const handleRemoveDomainTag = (tagToRemove: string) => {
+    if (domainTags.length <= 1) {
+      addToast({ type: 'warning', title: 'Action Denied', message: 'You must maintain at least one domain tag.' });
+      return;
+    }
+    const updated = domainTags.filter((t) => t !== tagToRemove);
+    setDomainTags(updated);
+    updateProfile({ custom_domains: updated });
+    addToast({ type: 'info', title: 'Domain Removed', message: `Removed "${tagToRemove}".` });
   };
 
   const handleExportCSV = () => {
@@ -202,7 +261,114 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </form>
       </div>
 
-      {/* 2. Device Security & App Lock */}
+      {/* 2. Custom Workspace & Expense Domains */}
+      <div className="p-6 rounded-3xl bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 shadow-sm space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+            <Layers className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="font-bold text-base text-surface-900 dark:text-surface-100">
+              Workspace Alias & Custom Expense Domains
+            </h3>
+            <p className="text-xs text-surface-500 dark:text-surface-400">
+              Configure personal workspace domain slugs and custom tagging categories (Business, Freelance, etc.)
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSaveDomains} className="space-y-4 pt-2">
+          {/* Workspace Slug / Alias */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-surface-600 dark:text-surface-300">
+              Workspace Domain Slug
+            </label>
+            <div className="relative rounded-xl shadow-sm">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-surface-400">
+                <Globe className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                value={customDomain}
+                onChange={(e) => setCustomDomain(e.target.value)}
+                placeholder="e.g. acme-workspace or john-freelance"
+                className="block w-full rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800 pl-10 pr-3.5 py-2.5 text-sm text-surface-900 dark:text-surface-100 font-medium focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+              />
+            </div>
+            <p className="text-[11px] text-surface-400">
+              Personalized workspace identifier attached to your account profile.
+            </p>
+          </div>
+
+          {/* Active Domain Tags Manager */}
+          <div className="space-y-2 pt-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-surface-600 dark:text-surface-300 flex items-center gap-1.5">
+              <Tag className="w-3.5 h-3.5 text-brand-500" />
+              <span>Available Expense Domain Tags</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {domainTags.map((tag) => {
+                const meta = getDomainMeta(tag);
+                return (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 text-surface-700 dark:text-surface-200"
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{ backgroundColor: meta.color }}
+                    />
+                    <span>{tag}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveDomainTag(tag)}
+                      title={`Remove ${tag} tag`}
+                      className="ml-1 text-surface-400 hover:text-rose-500 p-0.5 rounded-full"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+
+            {/* Add New Domain Tag Input */}
+            <div className="flex items-center gap-2 pt-2">
+              <input
+                type="text"
+                placeholder="New domain name (e.g. Vacation, Side-Project)"
+                value={newTagInput}
+                onChange={(e) => setNewTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddDomainTag();
+                  }
+                }}
+                className="flex-1 rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800 px-3.5 py-2 text-xs text-surface-900 dark:text-surface-100 focus:border-brand-500 focus:outline-none"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAddDomainTag}
+                disabled={!newTagInput.trim()}
+                leftIcon={<Plus className="w-3.5 h-3.5" />}
+              >
+                Add Domain Tag
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button type="submit" size="sm" isLoading={isSavingDomains}>
+              Save Workspace Domain Settings
+            </Button>
+          </div>
+        </form>
+      </div>
+
+      {/* 3. Device Security & App Lock */}
       <div className="p-6 rounded-3xl bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">

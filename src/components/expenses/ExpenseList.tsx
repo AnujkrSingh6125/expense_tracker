@@ -3,6 +3,7 @@ import { Expense } from '../../types';
 import { useExpenses } from '../../context/ExpenseContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatCurrency, formatDate } from '../../lib/utils';
+import { getDomainMeta } from '../../lib/constants';
 import { exportExpensesToCSV } from '../../lib/exportUtils';
 import { ExpenseFilterBar } from './ExpenseFilterBar';
 import { Badge } from '../ui/Badge';
@@ -29,17 +30,25 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
   onOpenAddExpense,
   onOpenEditExpense,
 }) => {
-  const { filteredExpenses, deleteExpense, addExpense } = useExpenses();
+  const { filteredExpenses, deleteExpense, addExpense, isLoading } = useExpenses();
   const { profile } = useAuth();
   const currency = profile?.currency || '₹';
 
-  const totalFilteredAmount = filteredExpenses.reduce(
-    (sum, item) => sum + Number(item.amount),
-    0
-  );
+  const handleDuplicate = (expense: Expense) => {
+    addExpense({
+      amount: expense.amount,
+      category: expense.category,
+      domain: expense.domain || 'Personal',
+      description: expense.description ? `${expense.description} (Copy)` : null,
+      payment_method: expense.payment_method,
+      expense_date: new Date().toISOString().split('T')[0],
+    });
+  };
 
   const getPaymentIcon = (method: string) => {
     switch (method) {
+      case 'Card':
+        return <CreditCard className="w-3.5 h-3.5" />;
       case 'UPI':
         return <Smartphone className="w-3.5 h-3.5" />;
       case 'Cash':
@@ -51,84 +60,82 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
     }
   };
 
-  const handleDuplicate = (expense: Expense) => {
-    addExpense({
-      amount: expense.amount,
-      category: expense.category,
-      description: `${expense.description || ''} (Copy)`.trim(),
-      payment_method: expense.payment_method,
-      expense_date: new Date().toISOString().split('T')[0],
-    });
-  };
-
-  const handleExport = () => {
-    exportExpensesToCSV(filteredExpenses, currency, 'filtered-expenses.csv');
-  };
-
   return (
     <div className="space-y-4">
-      {/* Filters Bar */}
+      {/* Filter and Search Bar */}
       <ExpenseFilterBar />
 
-      {/* Results Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
-        <div className="flex items-center gap-2">
-          <h3 className="font-bold text-base text-surface-900 dark:text-surface-100">
-            Recorded Transactions
-          </h3>
-          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400">
-            {filteredExpenses.length} entries
-          </span>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="text-xs text-surface-500 dark:text-surface-400">
-            Filtered Total:{' '}
-            <span className="font-extrabold text-sm text-surface-900 dark:text-surface-100">
-              {formatCurrency(totalFilteredAmount, currency)}
+      {/* Transactions List / Table */}
+      <div className="rounded-3xl bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 shadow-sm overflow-hidden transition-all">
+        {/* Table Header Controls */}
+        <div className="px-6 py-4 border-b border-surface-100 dark:border-surface-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-base text-surface-900 dark:text-surface-100">
+              Transactions Record
+            </h3>
+            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400">
+              {filteredExpenses.length} entries
             </span>
           </div>
 
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleExport}
-            leftIcon={<Download className="w-3.5 h-3.5" />}
-            className="text-xs"
-          >
-            CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            {filteredExpenses.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => exportExpensesToCSV(filteredExpenses, currency)}
+                leftIcon={<Download className="w-4 h-4" />}
+                className="text-xs"
+              >
+                Export CSV
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={onOpenAddExpense}
+              leftIcon={<Plus className="w-4 h-4" />}
+              className="text-xs bg-brand-600 hover:bg-brand-700"
+            >
+              Add Expense
+            </Button>
+          </div>
         </div>
-      </div>
 
-      {/* Expenses Table (Desktop) & Cards (Mobile) */}
-      <div className="bg-white dark:bg-surface-900 rounded-3xl border border-surface-200 dark:border-surface-800 shadow-sm overflow-hidden transition-all">
-        {filteredExpenses.length === 0 ? (
-          <div className="py-16 text-center space-y-3 px-4">
-            <div className="w-12 h-12 rounded-2xl bg-surface-100 dark:bg-surface-800 text-surface-400 mx-auto flex items-center justify-center">
+        {/* Loading State */}
+        {isLoading ? (
+          <div className="p-12 text-center text-surface-400 text-sm">
+            <div className="w-8 h-8 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            Loading transaction ledger...
+          </div>
+        ) : filteredExpenses.length === 0 ? (
+          /* Empty State */
+          <div className="p-12 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-surface-100 dark:bg-surface-800 text-surface-400 flex items-center justify-center mx-auto">
               <Receipt className="w-6 h-6" />
             </div>
-            <p className="text-sm font-semibold text-surface-700 dark:text-surface-300">
-              No matching expenses found
-            </p>
-            <p className="text-xs text-surface-500 dark:text-surface-400 max-w-sm mx-auto">
-              Try adjusting your search query, changing category filters, or select a different date range.
-            </p>
-            <Button size="sm" onClick={onOpenAddExpense} className="text-xs mt-2" leftIcon={<Plus className="w-4 h-4" />}>
-              Add Expense
+            <div>
+              <p className="font-bold text-sm text-surface-800 dark:text-surface-200">
+                No Transactions Found
+              </p>
+              <p className="text-xs text-surface-500 mt-0.5">
+                No expense entries match your current search, domain, or filter criteria.
+              </p>
+            </div>
+            <Button size="sm" onClick={onOpenAddExpense} leftIcon={<Plus className="w-4 h-4" />}>
+              Record First Expense
             </Button>
           </div>
         ) : (
           <>
-            {/* Desktop Table */}
+            {/* Desktop Table View */}
             <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-left text-xs sm:text-sm">
-                <thead className="bg-surface-50/75 dark:bg-surface-800/60 border-b border-surface-200 dark:border-surface-700 text-surface-500 dark:text-surface-400 font-semibold uppercase text-[10px] tracking-wider">
-                  <tr>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-surface-100 dark:border-surface-800 text-[11px] font-bold uppercase tracking-wider text-surface-400 bg-surface-50/50 dark:bg-surface-900/50">
                     <th className="py-3 px-4">Date</th>
-                    <th className="py-3 px-4">Domain / Category</th>
+                    <th className="py-3 px-4">Category & Domain</th>
                     <th className="py-3 px-4">Description</th>
-                    <th className="py-3 px-4">Method</th>
+                    <th className="py-3 px-4">Payment Method</th>
                     <th className="py-3 px-4 text-right">Amount</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
@@ -139,11 +146,25 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
                       key={exp.id}
                       className="hover:bg-surface-50/60 dark:hover:bg-surface-800/40 transition-colors group"
                     >
-                      <td className="py-3.5 px-4 font-mono text-xs text-surface-600 dark:text-surface-300 whitespace-nowrap">
+                      <td className="py-3.5 px-4 text-xs font-semibold text-surface-600 dark:text-surface-400 whitespace-nowrap">
                         {formatDate(exp.expense_date)}
                       </td>
                       <td className="py-3.5 px-4">
-                        <Badge category={exp.category} />
+                        <div className="flex items-center gap-1.5">
+                          <Badge category={exp.category} />
+                          {exp.domain && (
+                            <span
+                              className="text-[10px] font-bold px-2 py-0.5 rounded-md border"
+                              style={{
+                                borderColor: `${getDomainMeta(exp.domain).color}40`,
+                                backgroundColor: `${getDomainMeta(exp.domain).color}15`,
+                                color: getDomainMeta(exp.domain).color,
+                              }}
+                            >
+                              {exp.domain}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3.5 px-4 font-medium text-surface-900 dark:text-surface-100 max-w-xs truncate">
                         {exp.description || '—'}
@@ -193,7 +214,21 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
               {filteredExpenses.map((exp) => (
                 <div key={exp.id} className="p-4 space-y-2.5 hover:bg-surface-50/50 dark:hover:bg-surface-800/40 transition-colors">
                   <div className="flex items-start justify-between gap-2">
-                    <Badge category={exp.category} />
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge category={exp.category} />
+                      {exp.domain && (
+                        <span
+                          className="text-[10px] font-bold px-2 py-0.5 rounded-md border"
+                          style={{
+                            borderColor: `${getDomainMeta(exp.domain).color}40`,
+                            backgroundColor: `${getDomainMeta(exp.domain).color}15`,
+                            color: getDomainMeta(exp.domain).color,
+                          }}
+                        >
+                          {exp.domain}
+                        </span>
+                      )}
+                    </div>
                     <span className="font-extrabold text-base text-surface-900 dark:text-surface-100">
                       {formatCurrency(exp.amount, currency)}
                     </span>

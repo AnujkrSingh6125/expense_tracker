@@ -62,6 +62,7 @@ interface GroupContextType {
       title: string;
       amount: number;
       category: string;
+      domain?: string;
       paid_by: string;
       split_type: SplitType;
       expense_date: string;
@@ -1317,6 +1318,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       amount: number;
       category: string;
       paid_by: string;
+      domain?: string;
       split_type: SplitType;
       expense_date: string;
       notes?: string;
@@ -1333,6 +1335,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const newExpense: GroupExpense = {
       ...expenseData,
+      domain: expenseData.domain || 'General',
       id: newExpenseId,
       group_id: activeGroupId,
       created_at: nowStr,
@@ -1376,7 +1379,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addToast({
         type: 'success',
         title: 'Group Expense Added',
-        message: `Logged ${activeGroup?.currency || userCurrency}${Number(expenseData.amount).toFixed(2)} under ${expenseData.title}.`,
+        message: `Logged ${activeGroup?.currency || userCurrency}${Number(expenseData.amount).toFixed(2)} under ${expenseData.title} [${newExpense.domain}].`,
       });
       return { expense: newExpense, error: null };
     }
@@ -1411,6 +1414,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         amount: newExpense.amount,
         title: newExpense.title,
         category: newExpense.category,
+        domain: newExpense.domain || 'General',
         split_type: newExpense.split_type,
         expense_date: newExpense.expense_date,
         notes: newExpense.notes || null,

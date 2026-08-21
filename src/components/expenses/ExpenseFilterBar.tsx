@@ -1,12 +1,15 @@
 import React from 'react';
 import { useExpenses } from '../../context/ExpenseContext';
-import { STANDARD_CATEGORIES, PAYMENT_METHODS } from '../../lib/constants';
+import { useAuth } from '../../context/AuthContext';
+import { STANDARD_CATEGORIES, PAYMENT_METHODS, DEFAULT_DOMAINS } from '../../lib/constants';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Search, RotateCcw } from 'lucide-react';
 
 export const ExpenseFilterBar: React.FC = () => {
   const { filters, updateFilter, resetFilters } = useExpenses();
+  const { profile } = useAuth();
+  const availableDomains = ['All', ...(profile?.custom_domains || DEFAULT_DOMAINS)];
 
   return (
     <div className="p-4 rounded-2xl bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-800 shadow-sm space-y-3">
@@ -14,7 +17,7 @@ export const ExpenseFilterBar: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-center gap-3">
         <div className="flex-1 w-full">
           <Input
-            placeholder="Search by note, category, or payment method..."
+            placeholder="Search by note, category, domain, or payment method..."
             value={filters.searchQuery}
             onChange={(e) => updateFilter('searchQuery', e.target.value)}
             leftIcon={<Search className="w-4 h-4" />}
@@ -58,7 +61,7 @@ export const ExpenseFilterBar: React.FC = () => {
       </div>
 
       {/* Filter Selectors Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-1">
         {/* Category Domain Selector */}
         <div>
           <label className="block text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1">
@@ -73,6 +76,24 @@ export const ExpenseFilterBar: React.FC = () => {
             {STANDARD_CATEGORIES.map((cat) => (
               <option key={cat.id} value={cat.id}>
                 {cat.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Expense Domain Selector */}
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1">
+            Domain Tag
+          </label>
+          <select
+            value={filters.domain || 'All'}
+            onChange={(e) => updateFilter('domain', e.target.value)}
+            className="w-full rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800 px-3 py-2 text-xs text-surface-800 dark:text-surface-200 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+          >
+            {availableDomains.map((dom) => (
+              <option key={dom} value={dom}>
+                {dom === 'All' ? 'All Domains' : dom}
               </option>
             ))}
           </select>
@@ -120,10 +141,10 @@ export const ExpenseFilterBar: React.FC = () => {
             variant="ghost"
             size="sm"
             onClick={resetFilters}
-            leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
             className="w-full text-xs text-surface-500 hover:text-surface-800 dark:hover:text-surface-200"
+            leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
           >
-            Reset Filters
+            Reset
           </Button>
         </div>
       </div>

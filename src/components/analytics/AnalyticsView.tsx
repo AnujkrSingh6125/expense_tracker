@@ -1,8 +1,8 @@
 import React from 'react';
 import { DomainComparisonChart } from './DomainComparisonChart';
 import { MonthlySpendingBarChart } from './MonthlySpendingBarChart';
-import { AnnualSpendingBarChart } from './AnnualSpendingBarChart';
 import { AnalyticsSummary } from './AnalyticsSummary';
+import { TimeTravelInspector } from './TimeTravelInspector';
 import { MetricCards } from '../dashboard/MetricCards';
 import { MonthYearPicker } from '../layout/MonthYearPicker';
 
@@ -25,6 +25,9 @@ export const AnalyticsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Interactive Time-Travel Calendar Navigator & Hover Inspector */}
+      <TimeTravelInspector />
+
       {/* KPI Cards */}
       <MetricCards />
 
@@ -34,9 +37,8 @@ export const AnalyticsView: React.FC = () => {
         <MonthlySpendingBarChart />
       </div>
 
-      {/* Annual Trend & Domain Ranking */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <AnnualSpendingBarChart />
+      {/* Annual Summary & Domain Ranking */}
+      <div className="grid grid-cols-1 gap-6">
         <AnalyticsSummary />
       </div>
     </div>

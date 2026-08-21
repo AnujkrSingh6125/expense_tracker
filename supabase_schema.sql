@@ -12,9 +12,15 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   pin_hash TEXT,
   biometric_enabled BOOLEAN DEFAULT FALSE,
   biometric_credential_id TEXT,
+  custom_domain TEXT UNIQUE,
+  custom_domains TEXT[] DEFAULT '{"Personal","Business","Freelance","Side-Hustle","Household","Travel/Trip"}'::text[],
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Backward-compatible schema alterations
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS custom_domain TEXT UNIQUE;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS custom_domains TEXT[] DEFAULT '{"Personal","Business","Freelance","Side-Hustle","Household","Travel/Trip"}'::text[];
 
 -- 2. Create BUDGETS table
 CREATE TABLE IF NOT EXISTS public.budgets (
@@ -35,6 +41,7 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   amount NUMERIC NOT NULL CHECK (amount > 0),
   category TEXT NOT NULL,
+  domain TEXT DEFAULT 'Personal',
   description TEXT,
   payment_method TEXT NOT NULL CHECK (payment_method IN ('Card', 'Cash', 'UPI', 'Bank Transfer')),
   expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -42,9 +49,13 @@ CREATE TABLE IF NOT EXISTS public.expenses (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Backward-compatible schema alteration for expenses
+ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT 'Personal';
+
 -- Create Indexes for fast querying & filtering
 CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON public.expenses(user_id, expense_date);
 CREATE INDEX IF NOT EXISTS idx_expenses_category ON public.expenses(user_id, category);
+CREATE INDEX IF NOT EXISTS idx_expenses_domain ON public.expenses(user_id, domain);
 CREATE INDEX IF NOT EXISTS idx_budgets_user_month_year ON public.budgets(user_id, month, year);
 
 -- Enable Row Level Security (RLS)

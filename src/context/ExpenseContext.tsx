@@ -83,6 +83,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 18000,
       category: 'Rent',
+      domain: 'Household',
       description: 'Monthly Apartment Rent',
       payment_method: 'Bank Transfer',
       expense_date: `${currentYear}-${pad(currentMonth)}-01`,
@@ -92,6 +93,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 3450,
       category: 'Grocery',
+      domain: 'Household',
       description: 'Weekly organic groceries, vegetables & supplies',
       payment_method: 'UPI',
       expense_date: `${currentYear}-${pad(currentMonth)}-03`,
@@ -101,6 +103,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 2200,
       category: 'Utilities',
+      domain: 'Household',
       description: 'Electricity & High-speed Fiber Internet bill',
       payment_method: 'UPI',
       expense_date: `${currentYear}-${pad(currentMonth)}-05`,
@@ -110,6 +113,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 2850,
       category: 'Party/Dining',
+      domain: 'Personal',
       description: 'Weekend dinner with friends',
       payment_method: 'Card',
       expense_date: `${currentYear}-${pad(currentMonth)}-08`,
@@ -119,6 +123,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 1500,
       category: 'Transport',
+      domain: 'Personal',
       description: 'Cab rides & Metro card recharge',
       payment_method: 'UPI',
       expense_date: `${currentYear}-${pad(currentMonth)}-10`,
@@ -128,6 +133,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 4200,
       category: 'Shopping',
+      domain: 'Business',
       description: 'Ergonomic office accessories & electronics',
       payment_method: 'Card',
       expense_date: `${currentYear}-${pad(currentMonth)}-12`,
@@ -137,6 +143,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 2100,
       category: 'Grocery',
+      domain: 'Household',
       description: 'Supermarket fruits, dairy & household items',
       payment_method: 'UPI',
       expense_date: `${currentYear}-${pad(currentMonth)}-15`,
@@ -146,6 +153,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 1200,
       category: 'Healthcare',
+      domain: 'Personal',
       description: 'Pharmacy medicines & routine checkup',
       payment_method: 'Card',
       expense_date: `${currentYear}-${pad(currentMonth)}-18`,
@@ -155,6 +163,7 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 950,
       category: 'Entertainment',
+      domain: 'Personal',
       description: 'Movie tickets & OTT subscription',
       payment_method: 'UPI',
       expense_date: `${currentYear}-${pad(currentMonth)}-20`,
@@ -164,7 +173,8 @@ function generateDemoData(): { expenses: Expense[]; budgets: Budget[] } {
       user_id: 'demo-user-12345',
       amount: 1400,
       category: 'Party/Dining',
-      description: 'Café meet & team lunch',
+      domain: 'Freelance',
+      description: 'Café meet & client lunch',
       payment_method: 'Card',
       expense_date: `${currentYear}-${pad(currentMonth)}-22`,
     },
@@ -186,6 +196,7 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [filters, setFilters] = useState<ExpenseFilterState>({
     searchQuery: '',
     category: 'All',
+    domain: 'All',
     paymentMethod: 'All',
     startDate: '',
     endDate: '',
@@ -282,7 +293,7 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   }, [budgets, filters.selectedMonth, filters.selectedYear]);
 
-  // Filtered expenses based on search, category, payment method, date/month
+  // Filtered expenses based on search, category, domain, payment method, date/month
   const filteredExpenses = useMemo(() => {
     return expenses.filter((exp) => {
       const expDate = new Date(exp.expense_date);
@@ -308,18 +319,24 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return false;
       }
 
+      // Domain filter
+      if (filters.domain && filters.domain !== 'All' && (exp.domain || 'Personal') !== filters.domain) {
+        return false;
+      }
+
       // Payment method filter
       if (filters.paymentMethod !== 'All' && exp.payment_method !== filters.paymentMethod) {
         return false;
       }
 
-      // Search query (matches description or category)
+      // Search query (matches description, category, or domain)
       if (filters.searchQuery.trim()) {
         const query = filters.searchQuery.toLowerCase();
         const descMatch = (exp.description || '').toLowerCase().includes(query);
         const catMatch = exp.category.toLowerCase().includes(query);
+        const domMatch = (exp.domain || 'Personal').toLowerCase().includes(query);
         const methodMatch = exp.payment_method.toLowerCase().includes(query);
-        if (!descMatch && !catMatch && !methodMatch) return false;
+        if (!descMatch && !catMatch && !domMatch && !methodMatch) return false;
       }
 
       return true;
@@ -358,57 +375,60 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
     const previousMonthSpend = prevMonthExpenses.reduce((sum, item) => sum + Number(item.amount), 0);
 
-    let monthOverMonthChangePct: number | null = null;
-    if (previousMonthSpend > 0) {
-      monthOverMonthChangePct = ((totalSpentThisMonth - previousMonthSpend) / previousMonthSpend) * 100;
-    }
+    const momChangePct =
+      previousMonthSpend > 0
+        ? ((totalSpentThisMonth - previousMonthSpend) / previousMonthSpend) * 100
+        : null;
 
-    const budgetLimit = currentMonthBudget ? Number(currentMonthBudget.amount_limit) : null;
-    const alertThresholdPct = currentMonthBudget ? currentMonthBudget.alert_threshold_pct : 80;
+    const monthlyBudget = currentMonthBudget ? Number(currentMonthBudget.amount_limit) : null;
+    const remainingBudget = monthlyBudget !== null ? monthlyBudget - totalSpentThisMonth : null;
+    const budgetPercentage = monthlyBudget !== null && monthlyBudget > 0 ? (totalSpentThisMonth / monthlyBudget) * 100 : 0;
 
-    const remainingBudget = budgetLimit !== null ? budgetLimit - totalSpentThisMonth : null;
-    const budgetPercentage = budgetLimit && budgetLimit > 0 ? (totalSpentThisMonth / budgetLimit) * 100 : 0;
+    const activeThreshold = currentMonthBudget?.alert_threshold_pct || 80;
+    const isOverBudget = monthlyBudget !== null && totalSpentThisMonth >= monthlyBudget;
+    const isNearThreshold =
+      monthlyBudget !== null &&
+      !isOverBudget &&
+      totalSpentThisMonth >= (monthlyBudget * activeThreshold) / 100;
 
-    // Highest Domain
-    const domainTotals: Record<string, number> = {};
+    // Highest Domain / Category
+    const categoryTotals: Record<string, number> = {};
     monthExpenses.forEach((exp) => {
-      domainTotals[exp.category] = (domainTotals[exp.category] || 0) + Number(exp.amount);
+      categoryTotals[exp.category] = (categoryTotals[exp.category] || 0) + Number(exp.amount);
     });
 
     let highestDomain: { category: string; amount: number; percentage: number } | null = null;
-    let maxAmount = 0;
-    Object.entries(domainTotals).forEach(([category, amount]) => {
-      if (amount > maxAmount) {
-        maxAmount = amount;
+    let maxCatAmount = 0;
+
+    Object.entries(categoryTotals).forEach(([cat, amt]) => {
+      if (amt > maxCatAmount) {
+        maxCatAmount = amt;
         highestDomain = {
-          category,
-          amount,
-          percentage: totalSpentThisMonth > 0 ? (amount / totalSpentThisMonth) * 100 : 0,
+          category: cat,
+          amount: amt,
+          percentage: totalSpentThisMonth > 0 ? (amt / totalSpentThisMonth) * 100 : 0,
         };
       }
     });
 
     // Daily Average
-    const now = new Date();
-    const isCurrentMonthView =
-      now.getFullYear() === filters.selectedYear && now.getMonth() + 1 === filters.selectedMonth;
     const daysInMonth = new Date(filters.selectedYear, filters.selectedMonth, 0).getDate();
-    const elapsedDays = isCurrentMonthView ? Math.max(1, now.getDate()) : daysInMonth;
-    const dailyAverageSpend = totalSpentThisMonth / elapsedDays;
-
-    const isOverBudget = budgetLimit !== null && totalSpentThisMonth >= budgetLimit;
-    const isNearThreshold = budgetLimit !== null && budgetPercentage >= alertThresholdPct;
+    const currentDay =
+      filters.selectedYear === today.getFullYear() && filters.selectedMonth === today.getMonth() + 1
+        ? today.getDate()
+        : daysInMonth;
+    const dailyAverageSpend = currentDay > 0 ? totalSpentThisMonth / currentDay : 0;
 
     return {
       totalSpentThisMonth,
-      monthlyBudget: budgetLimit,
+      monthlyBudget,
       remainingBudget,
       budgetPercentage,
       highestDomain,
       dailyAverageSpend,
       previousMonthSpend,
-      monthOverMonthChangePct,
-      activeThreshold: alertThresholdPct,
+      monthOverMonthChangePct: momChangePct,
+      activeThreshold,
       isOverBudget,
       isNearThreshold,
     };
@@ -474,7 +494,7 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
   }, [expenses, filters.selectedMonth, filters.selectedYear]);
 
-  // Annual Month-over-Month History for selected year
+  // Annual Month-over-Month History for selected year with Rich Hover Telemetry
   const annualSpendingHistory: MonthlySpendingHistory[] = useMemo(() => {
     return Array.from({ length: 12 }, (_, idx) => {
       const monthIndex = idx + 1;
@@ -485,11 +505,44 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const amount = monthExpenses.reduce((sum, item) => sum + Number(item.amount), 0);
       const budgetObj = budgets.find((b) => b.year === filters.selectedYear && b.month === monthIndex);
 
+      // Compute domain breakdown for this month
+      const domainBreakdown: Record<string, number> = {};
+      const catBreakdown: Record<string, number> = {};
+      monthExpenses.forEach((e) => {
+        const dom = e.domain || 'Personal';
+        domainBreakdown[dom] = (domainBreakdown[dom] || 0) + Number(e.amount);
+        catBreakdown[e.category] = (catBreakdown[e.category] || 0) + Number(e.amount);
+      });
+
+      // Top category
+      let topCategory = 'None';
+      let topCategoryAmount = 0;
+      Object.entries(catBreakdown).forEach(([cat, amt]) => {
+        if (amt > topCategoryAmount) {
+          topCategoryAmount = amt;
+          topCategory = cat;
+        }
+      });
+
+      // Prev month spend for MoM %
+      const prevMonthIdx = monthIndex === 1 ? 12 : monthIndex - 1;
+      const prevYear = monthIndex === 1 ? filters.selectedYear - 1 : filters.selectedYear;
+      const prevMonthExpenses = expenses.filter((exp) => {
+        const d = new Date(exp.expense_date);
+        return d.getFullYear() === prevYear && d.getMonth() + 1 === prevMonthIdx;
+      });
+      const prevAmount = prevMonthExpenses.reduce((sum, item) => sum + Number(item.amount), 0);
+      const momChangePct = prevAmount > 0 ? ((amount - prevAmount) / prevAmount) * 100 : null;
+
       return {
         month: monthIndex,
         monthName: MONTH_NAMES_SHORT[idx],
         amount,
         budgetLimit: budgetObj ? Number(budgetObj.amount_limit) : 0,
+        count: monthExpenses.length,
+        topCategory: topCategory !== 'None' ? topCategory : undefined,
+        momChangePct,
+        domainBreakdown,
       };
     });
   }, [expenses, budgets, filters.selectedYear]);
@@ -531,6 +584,7 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const newExpense: Expense = {
       ...expenseData,
+      domain: expenseData.domain || 'Personal',
       id: newId,
       user_id: userId,
       created_at: nowStr,
@@ -560,7 +614,7 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
       addToast({
         type: 'success',
         title: 'Expense Added',
-        message: `Successfully logged ${currency}${Number(newExpense.amount).toFixed(2)} under ${newExpense.category}.`,
+        message: `Successfully logged ${currency}${Number(newExpense.amount).toFixed(2)} under ${newExpense.category} [${newExpense.domain}].`,
       });
       return { error: null };
     }
@@ -571,6 +625,7 @@ export const ExpenseProvider: React.FC<{ children: React.ReactNode }> = ({ child
         user_id: newExpense.user_id,
         amount: newExpense.amount,
         category: newExpense.category,
+        domain: newExpense.domain || 'Personal',
         description: newExpense.description,
         payment_method: newExpense.payment_method,
         expense_date: newExpense.expense_date,
