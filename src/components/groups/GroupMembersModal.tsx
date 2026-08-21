@@ -216,6 +216,24 @@ export const GroupMembersModal: React.FC<GroupMembersModalProps> = ({ isOpen, on
             <span>Total Contributed</span>
           </div>
 
+          {memberSummaries.length <= 1 && (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200 text-xs flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Share2 className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>Only you are in this group right now. Share the invite code to add friends!</span>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleCopyCode}
+                className="shrink-0 text-xs border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40"
+              >
+                {copied ? 'Copied' : 'Copy Code'}
+              </Button>
+            </div>
+          )}
+
           <div className="divide-y divide-surface-100 dark:divide-surface-800 max-h-72 overflow-y-auto pr-1">
             {memberSummaries.map((m) => {
               const isSelf = m.user_id === currentUserId;

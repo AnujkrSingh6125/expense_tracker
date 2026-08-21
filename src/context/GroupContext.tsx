@@ -606,46 +606,103 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
 
-        // 1. Fetch group members
-        const { data: membersRaw, error: memErr } = await supabase
-          .from('group_members')
-          .select('*')
-          .eq('group_id', activeGroupId);
-
-        if (memErr) throw memErr;
-
-        const userIds = (membersRaw || []).map((m) => m.user_id);
-        let profilesMap: Record<string, Profile> = {};
-
-        if (userIds.length > 0) {
-          const { data: profData } = await supabase
-            .from('profiles')
-            .select('*')
-            .in('id', userIds);
-
-          (profData || []).forEach((p) => {
-            profilesMap[p.id] = p;
+        // 1. Fetch group members (RPC first, direct table query fallback)
+        let membersData: GroupMember[] = [];
+        try {
+          const { data: rpcMembers, error: rpcErr } = await supabase.rpc('get_group_members', {
+            p_group_id: activeGroupId,
           });
+
+          if (!rpcErr && rpcMembers && rpcMembers.length > 0) {
+            membersData = rpcMembers.map((m: any) => ({
+              id: m.id,
+              group_id: m.group_id,
+              user_id: m.user_id,
+              role: (m.role as 'admin' | 'member') || 'member',
+              joined_at: m.joined_at,
+              profile: {
+                id: m.user_id,
+                email: m.email || 'member@expensetracker.app',
+                full_name: m.full_name || 'Member',
+                currency: m.currency || userCurrency,
+                pin_hash: null,
+                biometric_enabled: false,
+                biometric_credential_id: null,
+              },
+            }));
+          }
+        } catch (rpcCatch) {
+          console.warn('get_group_members RPC notice, using table fallback:', rpcCatch);
         }
 
-        const membersData: GroupMember[] = (membersRaw || []).map((m) => ({
-          ...m,
-          profile: profilesMap[m.user_id] || {
-            id: m.user_id,
-            email: 'member@expensetracker.app',
-            full_name: 'Member',
-            currency: userCurrency,
-            pin_hash: null,
-            biometric_enabled: false,
-            biometric_credential_id: null,
-          },
-        }));
+        // Direct table fallback if RPC didn't return members
+        if (membersData.length === 0) {
+          const { data: membersRaw } = await supabase
+            .from('group_members')
+            .select('*')
+            .eq('group_id', activeGroupId);
+
+          const userIds = (membersRaw || []).map((m) => m.user_id);
+          let profilesMap: Record<string, Profile> = {};
+
+          if (userIds.length > 0) {
+            const { data: profData } = await supabase
+              .from('profiles')
+              .select('*')
+              .in('id', userIds);
+
+            (profData || []).forEach((p) => {
+              profilesMap[p.id] = p;
+            });
+          }
+
+          membersData = (membersRaw || []).map((m) => ({
+            ...m,
+            profile: profilesMap[m.user_id] || {
+              id: m.user_id,
+              email: 'member@expensetracker.app',
+              full_name: 'Member',
+              currency: userCurrency,
+              pin_hash: null,
+              biometric_enabled: false,
+              biometric_credential_id: null,
+            },
+          }));
+        }
+
+        // Defensive fallback: If still empty, inject current user so UI never breaks
+        if (membersData.length === 0 && currentUserId) {
+          membersData = [
+            {
+              id: generateUUID(),
+              group_id: activeGroupId!,
+              user_id: currentUserId,
+              role: 'admin',
+              joined_at: new Date().toISOString(),
+              profile: {
+                id: currentUserId,
+                email: user?.email || 'you@expensetracker.app',
+                full_name: currentUserName || 'You',
+                currency: userCurrency,
+                pin_hash: null,
+                biometric_enabled: false,
+                biometric_credential_id: null,
+              },
+            },
+          ];
+        }
+
+        // Build quick lookup map of profiles from membersData
+        const membersMap: Record<string, Profile | undefined> = {};
+        membersData.forEach((m) => {
+          if (m.profile) membersMap[m.user_id] = m.profile;
+        });
 
         // 2. Fetch group expenses & splits
         const { data: expensesRaw, error: expErr } = await supabase
           .from('group_expenses')
           .select('*')
-          .eq('group_id', activeGroupId)
+          .eq('group_id', activeGroupId!)
           .order('expense_date', { ascending: false });
 
         if (expErr) throw expErr;
@@ -661,14 +718,14 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           splitsData = (splitsRaw || []).map((s) => ({
             ...s,
-            user_profile: profilesMap[s.user_id],
+            user_profile: membersMap[s.user_id],
           }));
         }
 
         const formattedExpenses: GroupExpense[] = (expensesRaw || []).map((e) => ({
           ...e,
           sync_status: 'synced' as const,
-          payer_profile: profilesMap[e.paid_by],
+          payer_profile: membersMap[e.paid_by],
           splits: splitsData.filter((s) => s.group_expense_id === e.id),
         }));
 

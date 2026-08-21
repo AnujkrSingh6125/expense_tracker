@@ -222,17 +222,23 @@ export const GroupExpenseModal: React.FC<GroupExpenseModalProps> = ({
                 <User className="w-4 h-4" />
               </div>
               <select
-                value={paidBy}
+                value={paidBy || currentUserId}
                 onChange={(e) => setPaidBy(e.target.value)}
                 className="block w-full rounded-xl border border-surface-200 dark:border-surface-700 bg-white dark:bg-surface-800 pl-10 pr-3.5 py-2.5 text-sm text-surface-900 dark:text-surface-100 font-medium focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
               >
-                {groupMembers.map((m) => (
-                  <option key={m.user_id} value={m.user_id}>
-                    {m.user_id === currentUserId
-                      ? `You (${m.profile?.full_name || 'Current User'})`
-                      : m.profile?.full_name || m.profile?.email || 'Member'}
+                {groupMembers.length === 0 ? (
+                  <option value={currentUserId}>
+                    You ({user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Current User'})
                   </option>
-                ))}
+                ) : (
+                  groupMembers.map((m) => (
+                    <option key={m.user_id} value={m.user_id}>
+                      {m.user_id === currentUserId
+                        ? `You (${m.profile?.full_name || 'Current User'})`
+                        : m.profile?.full_name || m.profile?.email || 'Member'}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>

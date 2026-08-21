@@ -61,6 +61,36 @@ CREATE TRIGGER trigger_sync_group_codes
   FOR EACH ROW
   EXECUTE FUNCTION public.sync_group_codes();
 
+-- Trigger to automatically add group creator to group_members as admin
+CREATE OR REPLACE FUNCTION public.handle_new_group_creator()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+BEGIN
+  IF NEW.created_by IS NOT NULL THEN
+    INSERT INTO public.group_members (group_id, user_id, role)
+    VALUES (NEW.id, NEW.created_by, 'admin')
+    ON CONFLICT (group_id, user_id) DO NOTHING;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trigger_new_group_creator ON public.groups;
+CREATE TRIGGER trigger_new_group_creator
+  AFTER INSERT ON public.groups
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_group_creator();
+
+-- Backfill creator as admin for any existing group missing membership
+INSERT INTO public.group_members (group_id, user_id, role)
+SELECT g.id, g.created_by, 'admin'
+FROM public.groups g
+WHERE g.created_by IS NOT NULL
+ON CONFLICT (group_id, user_id) DO NOTHING;
+
 -- 2. Create GROUP_MEMBERS table
 CREATE TABLE IF NOT EXISTS public.group_members (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -147,21 +177,12 @@ ALTER TABLE public.group_expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_expense_splits ENABLE ROW LEVEL SECURITY;
 
 -- 7. RLS Policies for PROFILES
-DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
-CREATE POLICY "Users can view own profile"
-  ON public.profiles FOR SELECT
-  USING (auth.uid() = id);
-
+DROP POLICY IF EXISTS "Public profiles are viewable by everyone" ON public.profiles;
 DROP POLICY IF EXISTS "Group members can view co-member profiles" ON public.profiles;
-CREATE POLICY "Group members can view co-member profiles"
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+CREATE POLICY "Public profiles are viewable by everyone"
   ON public.profiles FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.group_members gm1
-      JOIN public.group_members gm2 ON gm1.group_id = gm2.group_id
-      WHERE gm1.user_id = auth.uid() AND gm2.user_id = profiles.id
-    )
-  );
+  USING (true);
 
 DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile"
@@ -207,13 +228,10 @@ CREATE POLICY "Admins can delete their groups"
 
 -- 9. RLS Policies for GROUP_MEMBERS
 DROP POLICY IF EXISTS "Members can view group membership" ON public.group_members;
-CREATE POLICY "Members can view group membership"
+DROP POLICY IF EXISTS "Members can view group members" ON public.group_members;
+CREATE POLICY "Members can view group members"
   ON public.group_members FOR SELECT
-  USING (
-    group_id IN (
-      SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid()
-    )
-  );
+  USING (true);
 
 DROP POLICY IF EXISTS "Users can insert themselves or admins can add members" ON public.group_members;
 CREATE POLICY "Users can insert themselves or admins can add members"
@@ -394,6 +412,42 @@ BEGIN
   WHERE g.id = v_group_id;
 
   RETURN v_result;
+END;
+$$;
+
+-- Function: get_group_members (Fetches group members joined with names & emails)
+DROP FUNCTION IF EXISTS public.get_group_members(UUID);
+CREATE OR REPLACE FUNCTION public.get_group_members(p_group_id UUID)
+RETURNS TABLE (
+  id UUID,
+  group_id UUID,
+  user_id UUID,
+  role TEXT,
+  joined_at TIMESTAMPTZ,
+  full_name TEXT,
+  email TEXT,
+  currency TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    gm.id,
+    gm.group_id,
+    gm.user_id,
+    gm.role,
+    gm.joined_at,
+    COALESCE(p.full_name, u.raw_user_meta_data->>'full_name', split_part(u.email, '@', 1), 'Member')::TEXT AS full_name,
+    u.email::TEXT,
+    COALESCE(p.currency, '₹')::TEXT AS currency
+  FROM public.group_members gm
+  JOIN auth.users u ON u.id = gm.user_id
+  LEFT JOIN public.profiles p ON p.id = gm.user_id
+  WHERE gm.group_id = p_group_id
+  ORDER BY gm.joined_at ASC;
 END;
 $$;
 
@@ -704,6 +758,7 @@ GRANT EXECUTE ON FUNCTION public.leave_group(UUID) TO authenticated, anon, servi
 GRANT EXECUTE ON FUNCTION public.remove_group_member(UUID, UUID) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.update_group_member_role(UUID, UUID, TEXT) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_group_by_admin(UUID) TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.get_group_members(UUID) TO authenticated, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_user(UUID) TO authenticated, anon, service_role;
 
 -- 14. Enable Supabase Realtime for Group Collaboration
