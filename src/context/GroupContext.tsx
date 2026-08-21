@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 import { useExpenses } from './ExpenseContext';
@@ -278,6 +278,13 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
+  // Stability ref guards to prevent concurrent fetch storms and infinite loops
+  const isFetchingGroupsRef = useRef<boolean>(false);
+  const isFetchingDetailsRef = useRef<boolean>(false);
+  const isSyncingRef = useRef<boolean>(false);
+  const activeGroupIdRef = useRef<string | null>(activeGroupId);
+  activeGroupIdRef.current = activeGroupId;
+
   const currentUserId = user?.id || 'demo-user-12345';
   const currentUserName = profile?.full_name || 'You';
   const userCurrency = profile?.currency || '₹';
@@ -318,18 +325,20 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, []);
 
-  // Flush Pending Sync Queue to Supabase sequentially
+  // Flush Pending Sync Queue to Supabase sequentially (Guarded against duplicate executions)
   const syncPendingQueue = useCallback(async () => {
-    if (!isOnline || isSyncing || !isSupabaseConfigured || isDemoMode) return;
+    if (!isOnline || isSyncingRef.current || !isSupabaseConfigured || isDemoMode) return;
 
     try {
-      setIsSyncing(true);
       const queue = await getPendingSyncQueue();
       if (queue.length === 0) {
         setIsSyncing(false);
         setPendingSyncCount(0);
         return;
       }
+
+      isSyncingRef.current = true;
+      setIsSyncing(true);
 
       for (const item of queue) {
         try {
@@ -418,7 +427,6 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         } catch (itemErr: any) {
           console.error('Error syncing queue item:', item.action, itemErr);
-          // If record already exists or duplicate key error, safely remove from queue
           if (itemErr?.code === '23505' || itemErr?.message?.includes('duplicate key') || itemErr?.message?.includes('already exists')) {
             await removeSyncItem(item.id);
           }
@@ -437,9 +445,10 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch (err) {
       console.error('Failed to sync offline queue:', err);
     } finally {
+      isSyncingRef.current = false;
       setIsSyncing(false);
     }
-  }, [isOnline, isSyncing, isDemoMode, addToast]);
+  }, [isOnline, isDemoMode, addToast]);
 
   // Online / Offline network listeners
   useEffect(() => {
@@ -471,27 +480,29 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [syncPendingQueue, addToast]);
 
-  // Load User Groups from Supabase or IndexedDB Cache / Demo
-  const refreshGroupData = useCallback(async () => {
-    setIsLoading(true);
+  // Load User Groups from Supabase or IndexedDB Cache (Stable callback with ref guards)
+  const refreshGroupData = useCallback(async (isInitial = false) => {
+    if (isFetchingGroupsRef.current) return;
+    isFetchingGroupsRef.current = true;
+    if (isInitial) setIsLoading(true);
+
     try {
       if (isDemoMode || !isSupabaseConfigured) {
         const { demoGroups } = generateDemoGroups(currentUserId, currentUserName, userCurrency);
         const cached = await getAllLocalGroups();
         if (cached.length > 0) {
           setGroups(cached);
-          if (!activeGroupId && cached.length > 0) setActiveGroupId(cached[0].id);
+          if (!activeGroupIdRef.current && cached.length > 0) setActiveGroupId(cached[0].id);
         } else {
           setGroups(demoGroups);
           await saveLocalGroups(demoGroups);
-          if (!activeGroupId && demoGroups.length > 0) setActiveGroupId(demoGroups[0].id);
+          if (!activeGroupIdRef.current && demoGroups.length > 0) setActiveGroupId(demoGroups[0].id);
         }
-        setIsLoading(false);
         return;
       }
 
       // Fetch from Supabase
-      if (user) {
+      if (user?.id) {
         // Query groups where user is a member or creator
         const { data: memberRows, error: memberErr } = await supabase
           .from('group_members')
@@ -501,35 +512,6 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (memberErr) throw memberErr;
 
         const groupIds = (memberRows || []).map((r) => r.group_id);
-
-        // Auto-sync any locally created groups not yet on Supabase
-        const cached = await getAllLocalGroups();
-        const missingOnServer = cached.filter(
-          (cg) => cg.created_by === user.id && !groupIds.includes(cg.id)
-        );
-        for (const localG of missingOnServer) {
-          try {
-            const { error: gInsErr } = await supabase.from('groups').insert({
-              id: localG.id,
-              name: localG.name,
-              description: localG.description,
-              currency: localG.currency,
-              join_code: localG.join_code,
-              invite_code: localG.join_code,
-              created_by: user.id,
-            });
-            if (!gInsErr || gInsErr.code === '23505') {
-              await supabase.from('group_members').insert({
-                group_id: localG.id,
-                user_id: user.id,
-                role: 'admin',
-              });
-              groupIds.push(localG.id);
-            }
-          } catch (syncErr) {
-            console.warn('Auto-sync local group to Supabase notice:', syncErr);
-          }
-        }
 
         if (groupIds.length > 0) {
           const [groupsRes, membersRes] = await Promise.all([
@@ -559,7 +541,9 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             }));
             setGroups(formatted);
             await saveLocalGroups(formatted);
-            if (!activeGroupId && formatted.length > 0) setActiveGroupId(formatted[0].id);
+            if (!activeGroupIdRef.current && formatted.length > 0) {
+              setActiveGroupId(formatted[0].id);
+            }
           }
         } else {
           setGroups([]);
@@ -569,14 +553,184 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.warn('Falling back to local IndexedDB cache for groups:', err);
       const cached = await getAllLocalGroups();
       setGroups(cached);
-      if (!activeGroupId && cached.length > 0) setActiveGroupId(cached[0].id);
+      if (!activeGroupIdRef.current && cached.length > 0) setActiveGroupId(cached[0].id);
     } finally {
+      isFetchingGroupsRef.current = false;
       setIsLoading(false);
       refreshPendingCount();
     }
-  }, [user, isDemoMode, currentUserId, currentUserName, userCurrency, activeGroupId, refreshPendingCount]);
+  }, [user?.id, isDemoMode, currentUserId, currentUserName, userCurrency, refreshPendingCount]);
 
-  // Load Active Group Details (Members, Expenses, Splits)
+  // Load Active Group Details (Members, Expenses, Splits) - Stable callback
+  const loadActiveGroupDetails = useCallback(async (groupId: string) => {
+    if (!groupId || isFetchingDetailsRef.current) return;
+    isFetchingDetailsRef.current = true;
+
+    try {
+      if (isDemoMode || !isSupabaseConfigured) {
+        const { demoMembers, demoExpenses, demoSplits } = generateDemoGroups(
+          currentUserId,
+          currentUserName,
+          userCurrency
+        );
+        const localMembers = await getLocalGroupMembers(groupId);
+        const localExpenses = await getLocalGroupExpenses(groupId);
+
+        setGroupMembers(localMembers.length > 0 ? localMembers : demoMembers[groupId] || []);
+        setGroupExpenses(localExpenses.length > 0 ? localExpenses : demoExpenses[groupId] || []);
+        setGroupSplits(demoSplits[groupId] || []);
+        return;
+      }
+
+      // 1. Fetch group members (RPC first, direct table query fallback)
+      let membersData: GroupMember[] = [];
+      try {
+        const { data: rpcMembers, error: rpcErr } = await supabase.rpc('get_group_members', {
+          p_group_id: groupId,
+        });
+
+        if (!rpcErr && rpcMembers && rpcMembers.length > 0) {
+          membersData = rpcMembers.map((m: any) => ({
+            id: m.id,
+            group_id: m.group_id,
+            user_id: m.user_id,
+            role: (m.role as 'admin' | 'member') || 'member',
+            joined_at: m.joined_at,
+            profile: {
+              id: m.user_id,
+              email: m.email || 'member@expensetracker.app',
+              full_name: m.full_name || 'Member',
+              currency: m.currency || userCurrency,
+              pin_hash: null,
+              biometric_enabled: false,
+              biometric_credential_id: null,
+            },
+          }));
+        }
+      } catch (rpcCatch) {
+        console.warn('get_group_members RPC notice, using table fallback:', rpcCatch);
+      }
+
+      // Direct table fallback if RPC didn't return members
+      if (membersData.length === 0) {
+        const { data: membersRaw } = await supabase
+          .from('group_members')
+          .select('*')
+          .eq('group_id', groupId);
+
+        const userIds = (membersRaw || []).map((m) => m.user_id);
+        let profilesMap: Record<string, Profile> = {};
+
+        if (userIds.length > 0) {
+          const { data: profData } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', userIds);
+
+          (profData || []).forEach((p) => {
+            profilesMap[p.id] = p;
+          });
+        }
+
+        membersData = (membersRaw || []).map((m) => ({
+          ...m,
+          profile: profilesMap[m.user_id] || {
+            id: m.user_id,
+            email: 'member@expensetracker.app',
+            full_name: 'Member',
+            currency: userCurrency,
+            pin_hash: null,
+            biometric_enabled: false,
+            biometric_credential_id: null,
+          },
+        }));
+      }
+
+      // Defensive fallback: If still empty, inject current user so UI never breaks
+      if (membersData.length === 0 && currentUserId) {
+        membersData = [
+          {
+            id: generateUUID(),
+            group_id: groupId,
+            user_id: currentUserId,
+            role: 'admin',
+            joined_at: new Date().toISOString(),
+            profile: {
+              id: currentUserId,
+              email: user?.email || 'you@expensetracker.app',
+              full_name: currentUserName || 'You',
+              currency: userCurrency,
+              pin_hash: null,
+              biometric_enabled: false,
+              biometric_credential_id: null,
+            },
+          },
+        ];
+      }
+
+      // Build quick lookup map of profiles from membersData
+      const membersMap: Record<string, Profile | undefined> = {};
+      membersData.forEach((m) => {
+        if (m.profile) membersMap[m.user_id] = m.profile;
+      });
+
+      // 2. Fetch group expenses & splits
+      const { data: expensesRaw, error: expErr } = await supabase
+        .from('group_expenses')
+        .select('*')
+        .eq('group_id', groupId)
+        .order('expense_date', { ascending: false });
+
+      if (expErr) throw expErr;
+
+      const expenseIds = (expensesRaw || []).map((e) => e.id);
+      let splitsData: GroupExpenseSplit[] = [];
+
+      if (expenseIds.length > 0) {
+        const { data: splitsRaw } = await supabase
+          .from('group_expense_splits')
+          .select('*')
+          .in('group_expense_id', expenseIds);
+
+        splitsData = (splitsRaw || []).map((s) => ({
+          ...s,
+          user_profile: membersMap[s.user_id],
+        }));
+      }
+
+      const formattedExpenses: GroupExpense[] = (expensesRaw || []).map((e) => ({
+        ...e,
+        sync_status: 'synced' as const,
+        payer_profile: membersMap[e.paid_by],
+        splits: splitsData.filter((s) => s.group_expense_id === e.id),
+      }));
+
+      setGroupMembers(membersData);
+      setGroupExpenses(formattedExpenses);
+      setGroupSplits(splitsData);
+
+      await saveLocalGroupMembers(membersData);
+      await saveLocalGroupExpenses(formattedExpenses);
+    } catch (err) {
+      console.warn('Loading group details from local IndexedDB fallback:', err);
+      const localMembers = await getLocalGroupMembers(groupId);
+      const localExpenses = await getLocalGroupExpenses(groupId);
+      setGroupMembers(localMembers);
+      setGroupExpenses(localExpenses);
+    } finally {
+      isFetchingDetailsRef.current = false;
+    }
+  }, [user?.id, user?.email, isDemoMode, currentUserId, currentUserName, userCurrency]);
+
+  // Initial Load on mount or auth change + Flush Queue
+  useEffect(() => {
+    refreshGroupData(true);
+    if (isOnline && isSupabaseConfigured && !isDemoMode) {
+      syncPendingQueue();
+    }
+  }, [user?.id, isDemoMode, isOnline, refreshGroupData, syncPendingQueue]);
+
+  // Active Group Details & Supabase Realtime Subscription
   useEffect(() => {
     if (!activeGroupId) {
       setGroupMembers([]);
@@ -585,226 +739,50 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    let isMounted = true;
+    loadActiveGroupDetails(activeGroupId);
 
-    async function loadActiveGroupDetails() {
-      try {
-        if (isDemoMode || !isSupabaseConfigured) {
-          const { demoMembers, demoExpenses, demoSplits } = generateDemoGroups(
-            currentUserId,
-            currentUserName,
-            userCurrency
-          );
-          const localMembers = await getLocalGroupMembers(activeGroupId!);
-          const localExpenses = await getLocalGroupExpenses(activeGroupId!);
+    if (!isSupabaseConfigured || isDemoMode) return;
 
-          if (isMounted) {
-            setGroupMembers(localMembers.length > 0 ? localMembers : demoMembers[activeGroupId!] || []);
-            setGroupExpenses(localExpenses.length > 0 ? localExpenses : demoExpenses[activeGroupId!] || []);
-            setGroupSplits(demoSplits[activeGroupId!] || []);
-          }
-          return;
+    const channel = supabase
+      .channel(`group-live-room-${activeGroupId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${activeGroupId}` },
+        () => {
+          loadActiveGroupDetails(activeGroupId);
         }
-
-        // 1. Fetch group members (RPC first, direct table query fallback)
-        let membersData: GroupMember[] = [];
-        try {
-          const { data: rpcMembers, error: rpcErr } = await supabase.rpc('get_group_members', {
-            p_group_id: activeGroupId,
-          });
-
-          if (!rpcErr && rpcMembers && rpcMembers.length > 0) {
-            membersData = rpcMembers.map((m: any) => ({
-              id: m.id,
-              group_id: m.group_id,
-              user_id: m.user_id,
-              role: (m.role as 'admin' | 'member') || 'member',
-              joined_at: m.joined_at,
-              profile: {
-                id: m.user_id,
-                email: m.email || 'member@expensetracker.app',
-                full_name: m.full_name || 'Member',
-                currency: m.currency || userCurrency,
-                pin_hash: null,
-                biometric_enabled: false,
-                biometric_credential_id: null,
-              },
-            }));
-          }
-        } catch (rpcCatch) {
-          console.warn('get_group_members RPC notice, using table fallback:', rpcCatch);
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_expenses', filter: `group_id=eq.${activeGroupId}` },
+        () => {
+          loadActiveGroupDetails(activeGroupId);
         }
-
-        // Direct table fallback if RPC didn't return members
-        if (membersData.length === 0) {
-          const { data: membersRaw } = await supabase
-            .from('group_members')
-            .select('*')
-            .eq('group_id', activeGroupId);
-
-          const userIds = (membersRaw || []).map((m) => m.user_id);
-          let profilesMap: Record<string, Profile> = {};
-
-          if (userIds.length > 0) {
-            const { data: profData } = await supabase
-              .from('profiles')
-              .select('*')
-              .in('id', userIds);
-
-            (profData || []).forEach((p) => {
-              profilesMap[p.id] = p;
-            });
-          }
-
-          membersData = (membersRaw || []).map((m) => ({
-            ...m,
-            profile: profilesMap[m.user_id] || {
-              id: m.user_id,
-              email: 'member@expensetracker.app',
-              full_name: 'Member',
-              currency: userCurrency,
-              pin_hash: null,
-              biometric_enabled: false,
-              biometric_credential_id: null,
-            },
-          }));
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_expense_splits' },
+        () => {
+          loadActiveGroupDetails(activeGroupId);
         }
-
-        // Defensive fallback: If still empty, inject current user so UI never breaks
-        if (membersData.length === 0 && currentUserId) {
-          membersData = [
-            {
-              id: generateUUID(),
-              group_id: activeGroupId!,
-              user_id: currentUserId,
-              role: 'admin',
-              joined_at: new Date().toISOString(),
-              profile: {
-                id: currentUserId,
-                email: user?.email || 'you@expensetracker.app',
-                full_name: currentUserName || 'You',
-                currency: userCurrency,
-                pin_hash: null,
-                biometric_enabled: false,
-                biometric_credential_id: null,
-              },
-            },
-          ];
-        }
-
-        // Build quick lookup map of profiles from membersData
-        const membersMap: Record<string, Profile | undefined> = {};
-        membersData.forEach((m) => {
-          if (m.profile) membersMap[m.user_id] = m.profile;
-        });
-
-        // 2. Fetch group expenses & splits
-        const { data: expensesRaw, error: expErr } = await supabase
-          .from('group_expenses')
-          .select('*')
-          .eq('group_id', activeGroupId!)
-          .order('expense_date', { ascending: false });
-
-        if (expErr) throw expErr;
-
-        const expenseIds = (expensesRaw || []).map((e) => e.id);
-        let splitsData: GroupExpenseSplit[] = [];
-
-        if (expenseIds.length > 0) {
-          const { data: splitsRaw } = await supabase
-            .from('group_expense_splits')
-            .select('*')
-            .in('group_expense_id', expenseIds);
-
-          splitsData = (splitsRaw || []).map((s) => ({
-            ...s,
-            user_profile: membersMap[s.user_id],
-          }));
-        }
-
-        const formattedExpenses: GroupExpense[] = (expensesRaw || []).map((e) => ({
-          ...e,
-          sync_status: 'synced' as const,
-          payer_profile: membersMap[e.paid_by],
-          splits: splitsData.filter((s) => s.group_expense_id === e.id),
-        }));
-
-        if (isMounted) {
-          setGroupMembers(membersData);
-          setGroupExpenses(formattedExpenses);
-          setGroupSplits(splitsData);
-
-          // Update local IndexedDB cache
-          await saveLocalGroupMembers(membersData);
-          await saveLocalGroupExpenses(formattedExpenses);
-        }
-      } catch (err) {
-        console.warn('Loading group details from local IndexedDB fallback:', err);
-        const localMembers = await getLocalGroupMembers(activeGroupId!);
-        const localExpenses = await getLocalGroupExpenses(activeGroupId!);
-        if (isMounted) {
-          setGroupMembers(localMembers);
-          setGroupExpenses(localExpenses);
-        }
-      }
-    }
-
-    loadActiveGroupDetails();
-
-    // Supabase Realtime Subscription for Live Collaborative Updates
-    let channel: any = null;
-    if (isSupabaseConfigured && !isDemoMode && activeGroupId) {
-      channel = supabase
-        .channel(`group-live-room-${activeGroupId}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${activeGroupId}` },
-          () => {
-            loadActiveGroupDetails();
-            refreshGroupData();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'group_expenses', filter: `group_id=eq.${activeGroupId}` },
-          () => {
-            loadActiveGroupDetails();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'group_expense_splits' },
-          () => {
-            loadActiveGroupDetails();
-          }
-        )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'groups', filter: `id=eq.${activeGroupId}` },
-          () => {
-            refreshGroupData();
-            loadActiveGroupDetails();
-          }
-        )
-        .subscribe();
-    }
+      )
+      .subscribe();
 
     return () => {
-      isMounted = false;
-      if (channel) supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
-  }, [activeGroupId, user, isDemoMode, currentUserId, currentUserName, userCurrency, refreshGroupData]);
+  }, [activeGroupId, loadActiveGroupDetails, isDemoMode]);
 
   // Global Realtime Subscription for user's group memberships
   useEffect(() => {
-    if (!isSupabaseConfigured || isDemoMode || !user) return;
+    if (!isSupabaseConfigured || isDemoMode || !user?.id) return;
     const userMembershipsChannel = supabase
       .channel(`user-memberships-${user.id}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'group_members', filter: `user_id=eq.${user.id}` },
         () => {
-          refreshGroupData();
+          refreshGroupData(false);
         }
       )
       .subscribe();
@@ -812,15 +790,7 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       supabase.removeChannel(userMembershipsChannel);
     };
-  }, [user, isDemoMode, refreshGroupData]);
-
-  // Initial Load on mount or auth change + Flush Queue
-  useEffect(() => {
-    refreshGroupData();
-    if (isOnline && isSupabaseConfigured && !isDemoMode) {
-      syncPendingQueue();
-    }
-  }, [refreshGroupData, isOnline, syncPendingQueue, isDemoMode]);
+  }, [user?.id, isDemoMode, refreshGroupData]);
 
   // CRUD: Create Group
   const createGroup = async (
