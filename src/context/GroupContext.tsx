@@ -11,6 +11,7 @@ import {
   GroupMemberSummary,
   GroupSettlement,
   SplitType,
+  Profile,
 } from '../types';
 import {
   getAllLocalGroups,
@@ -531,17 +532,29 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         if (groupIds.length > 0) {
-          const { data: groupsData, error: groupsErr } = await supabase
-            .from('groups')
-            .select('*')
-            .in('id', groupIds)
-            .order('created_at', { ascending: false });
+          const [groupsRes, membersRes] = await Promise.all([
+            supabase
+              .from('groups')
+              .select('*')
+              .in('id', groupIds)
+              .order('created_at', { ascending: false }),
+            supabase
+              .from('group_members')
+              .select('group_id, user_id')
+              .in('group_id', groupIds),
+          ]);
 
-          if (groupsErr) throw groupsErr;
+          if (groupsRes.error) throw groupsRes.error;
 
-          if (groupsData) {
-            const formatted = groupsData.map((g) => ({
+          const countMap = (membersRes.data || []).reduce<Record<string, number>>((acc, m) => {
+            acc[m.group_id] = (acc[m.group_id] || 0) + 1;
+            return acc;
+          }, {});
+
+          if (groupsRes.data) {
+            const formatted = groupsRes.data.map((g) => ({
               ...g,
+              member_count: countMap[g.id] || 1,
               sync_status: 'synced' as const,
             }));
             setGroups(formatted);
@@ -593,48 +606,79 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
 
-        // Fetch from Supabase with Profiles
-        const [membersRes, expensesRes, splitsRes] = await Promise.all([
-          supabase
-            .from('group_members')
-            .select('*, profile:profiles(*)')
-            .eq('group_id', activeGroupId),
-          supabase
-            .from('group_expenses')
-            .select('*, payer_profile:profiles(*)')
-            .eq('group_id', activeGroupId)
-            .order('expense_date', { ascending: false }),
-          supabase
+        // 1. Fetch group members
+        const { data: membersRaw, error: memErr } = await supabase
+          .from('group_members')
+          .select('*')
+          .eq('group_id', activeGroupId);
+
+        if (memErr) throw memErr;
+
+        const userIds = (membersRaw || []).map((m) => m.user_id);
+        let profilesMap: Record<string, Profile> = {};
+
+        if (userIds.length > 0) {
+          const { data: profData } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', userIds);
+
+          (profData || []).forEach((p) => {
+            profilesMap[p.id] = p;
+          });
+        }
+
+        const membersData: GroupMember[] = (membersRaw || []).map((m) => ({
+          ...m,
+          profile: profilesMap[m.user_id] || {
+            id: m.user_id,
+            email: 'member@expensetracker.app',
+            full_name: 'Member',
+            currency: userCurrency,
+            pin_hash: null,
+            biometric_enabled: false,
+            biometric_credential_id: null,
+          },
+        }));
+
+        // 2. Fetch group expenses & splits
+        const { data: expensesRaw, error: expErr } = await supabase
+          .from('group_expenses')
+          .select('*')
+          .eq('group_id', activeGroupId)
+          .order('expense_date', { ascending: false });
+
+        if (expErr) throw expErr;
+
+        const expenseIds = (expensesRaw || []).map((e) => e.id);
+        let splitsData: GroupExpenseSplit[] = [];
+
+        if (expenseIds.length > 0) {
+          const { data: splitsRaw } = await supabase
             .from('group_expense_splits')
-            .select('*, user_profile:profiles(*)')
-            .in(
-              'group_expense_id',
-              (
-                await supabase
-                  .from('group_expenses')
-                  .select('id')
-                  .eq('group_id', activeGroupId)
-              ).data?.map((e) => e.id) || []
-            ),
-        ]);
+            .select('*')
+            .in('group_expense_id', expenseIds);
+
+          splitsData = (splitsRaw || []).map((s) => ({
+            ...s,
+            user_profile: profilesMap[s.user_id],
+          }));
+        }
+
+        const formattedExpenses: GroupExpense[] = (expensesRaw || []).map((e) => ({
+          ...e,
+          sync_status: 'synced' as const,
+          payer_profile: profilesMap[e.paid_by],
+          splits: splitsData.filter((s) => s.group_expense_id === e.id),
+        }));
 
         if (isMounted) {
-          const membersData = membersRes.data || [];
-          const expensesData = expensesRes.data || [];
-          const splitsData = (splitsRes.data || []) as GroupExpenseSplit[];
-
-          const formattedExpenses = (expensesData || []).map((e) => ({
-            ...e,
-            sync_status: 'synced' as const,
-            splits: splitsData.filter((s) => s.group_expense_id === e.id),
-          }));
-
-          setGroupMembers((membersData || []) as GroupMember[]);
+          setGroupMembers(membersData);
           setGroupExpenses(formattedExpenses);
           setGroupSplits(splitsData);
 
           // Update local IndexedDB cache
-          await saveLocalGroupMembers((membersData || []) as GroupMember[]);
+          await saveLocalGroupMembers(membersData);
           await saveLocalGroupExpenses(formattedExpenses);
         }
       } catch (err) {

@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS public.groups (
   currency TEXT DEFAULT '₹',
   join_code TEXT UNIQUE NOT NULL,
   invite_code TEXT,
-  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -65,7 +65,7 @@ CREATE TRIGGER trigger_sync_group_codes
 CREATE TABLE IF NOT EXISTS public.group_members (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   role TEXT DEFAULT 'member' CHECK (role IN ('admin', 'member')),
   joined_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT unique_group_member UNIQUE (group_id, user_id)
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS public.group_members (
 CREATE TABLE IF NOT EXISTS public.group_expenses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
-  paid_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  paid_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
   title TEXT NOT NULL DEFAULT 'Expense',
   description TEXT,
@@ -121,7 +121,7 @@ CREATE TRIGGER trigger_sync_group_expense_fields
 CREATE TABLE IF NOT EXISTS public.group_expense_splits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_expense_id UUID NOT NULL REFERENCES public.group_expenses(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   owed_amount NUMERIC(12,2) NOT NULL CHECK (owed_amount >= 0),
   settled BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
