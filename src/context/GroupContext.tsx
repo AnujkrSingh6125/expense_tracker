@@ -771,23 +771,32 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // CRUD: Join Group by Code
+  // CRUD: Join Group by Code (with case, whitespace, and prefix tolerance)
   const joinGroup = async (joinCode: string): Promise<{ group: Group | null; error: Error | null }> => {
-    const cleanCode = joinCode.trim().toUpperCase();
-    if (!cleanCode) {
+    const rawInput = joinCode.trim().toUpperCase();
+    if (!rawInput) {
       return { group: null, error: new Error('Please enter a valid join code') };
     }
 
+    // Strip optional EXP- prefix and clean whitespace/hyphens
+    const strippedCode = rawInput.replace(/^EXP[-_ ]?/i, '');
+    const standardPrefixCode = `EXP-${strippedCode}`;
+
     if (isDemoMode || !isSupabaseConfigured) {
-      // Find or create in demo mode
-      let target = groups.find((g) => g.join_code.toUpperCase() === cleanCode);
+      // Find or create in demo mode with prefix tolerance
+      let target = groups.find((g) => {
+        const gCode = g.join_code.trim().toUpperCase();
+        const gStripped = gCode.replace(/^EXP[-_ ]?/i, '');
+        return gCode === rawInput || gCode === standardPrefixCode || gStripped === strippedCode;
+      });
+
       if (!target) {
         target = {
           id: generateUUID(),
-          name: `Shared Group (${cleanCode})`,
+          name: `Shared Group (${standardPrefixCode})`,
           description: 'Collaborative group space',
           currency: userCurrency,
-          join_code: cleanCode,
+          join_code: standardPrefixCode,
           created_by: 'demo-creator',
           created_at: new Date().toISOString(),
           member_count: 2,
@@ -807,9 +816,9 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     try {
-      // 1. Attempt RPC call
+      // 1. Attempt RPC call (passing standard prefix code or raw input)
       const { data, error } = await supabase.rpc('join_group_by_code', {
-        p_code: cleanCode,
+        p_code: standardPrefixCode,
       });
 
       if (!error && data) {
@@ -819,31 +828,35 @@ export const GroupProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         addToast({
           type: 'success',
-          title: 'Joined Group!',
-          message: `You are now a member of "${data.name}".`,
+          title: data.already_member ? 'Switched to Group' : 'Joined Group!',
+          message: data.already_member
+            ? `You are already a member of "${data.name}".`
+            : `You are now a member of "${data.name}".`,
         });
         return { group: data as Group, error: null };
       }
 
-      // 2. If RPC returned an error, inspect if it's missing RPC function or invalid code
+      // 2. If RPC returned an error, inspect whether it's invalid code or missing RPC function
       if (error) {
         console.warn('RPC join_group_by_code notice, trying client fallback query:', error);
 
         // If explicit not-found error from RPC
         if (error.message && error.message.includes('No matching group found')) {
-          addToast({ type: 'error', title: 'Invalid Invite Code', message: `No group found with code "${cleanCode}".` });
-          return { group: null, error: new Error(`No group found with code "${cleanCode}"`) };
+          const notFoundMsg = `No group found with code "${rawInput}". Please check with your group admin.`;
+          addToast({ type: 'error', title: 'Invalid Invite Code', message: notFoundMsg });
+          return { group: null, error: new Error(notFoundMsg) };
         }
 
-        // Schema cache or function missing fallback: query groups directly
+        // Schema cache or function missing fallback: query groups directly with prefix tolerance
         const { data: groupData, error: groupFetchErr } = await supabase
           .from('groups')
           .select('*')
-          .ilike('join_code', cleanCode)
+          .or(`join_code.ilike.${standardPrefixCode},join_code.ilike.${rawInput},join_code.ilike.%${strippedCode}%`)
+          .limit(1)
           .maybeSingle();
 
         if (groupFetchErr || !groupData) {
-          const msg = `Invalid invite code (${cleanCode}). No matching group found.`;
+          const msg = `Invalid invite code (${rawInput}). No matching group found.`;
           addToast({ type: 'error', title: 'Group Not Found', message: msg });
           return { group: null, error: new Error(msg) };
         }

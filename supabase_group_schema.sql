@@ -3,6 +3,16 @@
 -- PostgreSQL / Supabase
 -- ==========================================================
 
+-- 0. Ensure profiles exist for all existing Supabase Auth users
+INSERT INTO public.profiles (id, email, full_name, currency)
+SELECT 
+  id,
+  email,
+  COALESCE(raw_user_meta_data->>'full_name', split_part(email, '@', 1)),
+  '₹'
+FROM auth.users
+ON CONFLICT (id) DO NOTHING;
+
 -- 1. Create GROUPS table
 CREATE TABLE IF NOT EXISTS public.groups (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -333,7 +343,7 @@ BEGIN
 END;
 $$;
 
--- Function: join_group_by_code
+-- Function: join_group_by_code (with case, whitespace, and prefix tolerance)
 CREATE OR REPLACE FUNCTION public.join_group_by_code(p_code TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -343,6 +353,10 @@ AS $$
 DECLARE
   v_user_id UUID;
   v_group RECORD;
+  v_clean_code TEXT;
+  v_raw_code TEXT;
+  v_prefixed_code TEXT;
+  v_already_member BOOLEAN := FALSE;
   v_result JSONB;
 BEGIN
   v_user_id := auth.uid();
@@ -354,19 +368,35 @@ BEGIN
     RAISE EXCEPTION 'Please provide a valid invite join code.';
   END IF;
 
-  -- Find group by join_code (case-insensitive and trimmed)
+  v_clean_code := UPPER(trim(p_code));
+  v_raw_code := regexp_replace(v_clean_code, '^EXP[-_ ]?', '', 'i');
+  v_prefixed_code := 'EXP-' || v_raw_code;
+
+  -- Find group by join_code with prefix, case, and format tolerance
   SELECT * INTO v_group
   FROM public.groups
-  WHERE UPPER(trim(join_code)) = UPPER(trim(p_code));
+  WHERE UPPER(trim(join_code)) = v_clean_code
+     OR UPPER(trim(join_code)) = v_prefixed_code
+     OR UPPER(trim(regexp_replace(join_code, '^EXP[-_ ]?', '', 'i'))) = v_raw_code
+     OR UPPER(trim(replace(join_code, '-', ''))) = UPPER(trim(replace(v_clean_code, '-', '')))
+  LIMIT 1;
 
   IF v_group.id IS NULL THEN
-    RAISE EXCEPTION 'Invalid invite code (%). No matching group found.', trim(p_code);
+    RAISE EXCEPTION 'Invalid invite code (%). No matching group found.', v_clean_code;
   END IF;
 
+  -- Check if already a member
+  SELECT EXISTS (
+    SELECT 1 FROM public.group_members
+    WHERE group_id = v_group.id AND user_id = v_user_id
+  ) INTO v_already_member;
+
   -- Insert member if not already joined
-  INSERT INTO public.group_members (group_id, user_id, role)
-  VALUES (v_group.id, v_user_id, 'member')
-  ON CONFLICT (group_id, user_id) DO NOTHING;
+  IF NOT v_already_member THEN
+    INSERT INTO public.group_members (group_id, user_id, role)
+    VALUES (v_group.id, v_user_id, 'member')
+    ON CONFLICT (group_id, user_id) DO NOTHING;
+  END IF;
 
   SELECT jsonb_build_object(
     'id', v_group.id,
@@ -375,7 +405,8 @@ BEGIN
     'currency', v_group.currency,
     'join_code', v_group.join_code,
     'created_by', v_group.created_by,
-    'created_at', v_group.created_at
+    'created_at', v_group.created_at,
+    'already_member', v_already_member
   ) INTO v_result;
 
   RETURN v_result;

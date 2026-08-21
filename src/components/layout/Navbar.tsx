@@ -75,20 +75,39 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Center: Month/Year selector (in personal mode) OR Space Switcher Pill */}
-        <div className="hidden md:flex items-center gap-3">
-          {appSpace === 'personal' ? (
-            <MonthYearPicker />
-          ) : (
+        {/* Center: Space Switcher Tabs & Month Picker */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center p-0.5 rounded-xl bg-surface-100 dark:bg-surface-800 border border-surface-200 dark:border-surface-700/60 text-xs font-bold">
             <button
               type="button"
               onClick={() => setAppSpace('personal')}
-              className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-100 dark:bg-surface-800 text-xs font-bold text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-700 transition-colors"
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition-all ${
+                appSpace === 'personal'
+                  ? 'bg-white dark:bg-surface-700 text-brand-600 dark:text-brand-300 shadow-sm'
+                  : 'text-surface-500 hover:text-surface-800 dark:hover:text-surface-200'
+              }`}
             >
-              <Users className="w-4 h-4 text-brand-600 dark:text-brand-400" />
-              <span>{activeGroup ? activeGroup.name : 'All Groups'}</span>
-              <span className="text-[10px] text-surface-400 font-normal ml-1">(Click for Personal)</span>
+              <User className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline sm:inline">Personal</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setAppSpace('groups')}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition-all relative ${
+                appSpace === 'groups'
+                  ? 'bg-white dark:bg-surface-700 text-brand-600 dark:text-brand-300 shadow-sm'
+                  : 'text-surface-500 hover:text-surface-800 dark:hover:text-surface-200'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Groups</span>
+            </button>
+          </div>
+
+          {appSpace === 'personal' && (
+            <div className="hidden lg:flex items-center">
+              <MonthYearPicker />
+            </div>
           )}
         </div>
 

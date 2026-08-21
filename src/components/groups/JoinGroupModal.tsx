@@ -16,17 +16,16 @@ export const JoinGroupModal: React.FC<JoinGroupModalProps> = ({ isOpen, onClose 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Natural typing handler with full backspace/delete support
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.toUpperCase();
-    if (!val.startsWith('EXP-') && val.length > 0 && !val.includes('-')) {
-      val = 'EXP-' + val.replace(/[^A-Z0-9]/g, '');
-    }
-    setJoinCode(val);
+    setJoinCode(e.target.value.toUpperCase());
+    if (error) setError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!joinCode.trim()) {
+    const clean = joinCode.trim();
+    if (!clean) {
       setError('Please enter a group invite code.');
       return;
     }
@@ -34,7 +33,7 @@ export const JoinGroupModal: React.FC<JoinGroupModalProps> = ({ isOpen, onClose 
     setError(null);
     setIsLoading(true);
 
-    const { error: joinErr } = await joinGroup(joinCode.trim());
+    const { error: joinErr } = await joinGroup(clean);
     setIsLoading(false);
 
     if (joinErr) {
@@ -48,13 +47,17 @@ export const JoinGroupModal: React.FC<JoinGroupModalProps> = ({ isOpen, onClose 
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={() => {
+        setError(null);
+        setJoinCode('');
+        onClose();
+      }}
       title="Join an Existing Group"
       subtitle="Enter the invite code shared by the group admin to join the workspace."
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
-          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 dark:text-rose-400 font-medium">
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 dark:text-rose-400 font-medium animate-slide-up">
             {error}
           </div>
         )}
@@ -62,12 +65,13 @@ export const JoinGroupModal: React.FC<JoinGroupModalProps> = ({ isOpen, onClose 
         <Input
           label="Group Invite Code *"
           type="text"
-          placeholder="e.g. EXP-98A4"
+          placeholder="e.g. EXP-98A4 or 98A4"
           value={joinCode}
           onChange={handleInputChange}
           leftIcon={<KeyRound className="w-4 h-4 text-surface-400" />}
           required
-          helperText="Format: EXP-XXXX (Case-insensitive)"
+          autoFocus
+          helperText="Format: EXP-XXXX or just XXXX (Case-insensitive)"
           className="font-mono uppercase tracking-widest text-center text-base"
         />
 
@@ -82,13 +86,22 @@ export const JoinGroupModal: React.FC<JoinGroupModalProps> = ({ isOpen, onClose 
         </div>
 
         <div className="flex gap-3 pt-3">
-          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            onClick={() => {
+              setError(null);
+              setJoinCode('');
+              onClose();
+            }}
+          >
             Cancel
           </Button>
           <Button
             type="submit"
             isLoading={isLoading}
-            className="flex-1 bg-brand-600 hover:bg-brand-700 flex items-center justify-center gap-2"
+            className="flex-1 bg-brand-600 hover:bg-brand-700 flex items-center justify-center gap-2 font-bold"
           >
             <span>Join Group</span>
             <ArrowRight className="w-4 h-4" />
